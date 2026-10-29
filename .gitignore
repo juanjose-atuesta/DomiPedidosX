@@ -1,0 +1,27 @@
+# Python / Django
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.sqlite3
+db.sqlite3
+staticfiles/
+media/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / React
+node_modules/
+dist/
+.vite/
+
+# Variables de entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store

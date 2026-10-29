@@ -1,0 +1,12 @@
+Django>=5.0
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+django-environ
+psycopg[binary]
+drf-spectacular
+# Sprint 3-4 (notificaciones asíncronas y tiempo real), agregar cuando se necesiten:
+# celery
+# redis
+# channels
+# daphne
