@@ -1,0 +1,381 @@
+================================================================================
+DOMIPEDIDOSX - GUÍA DE TRABAJO CON GIT
+Ramas, commits y Pull Requests
+================================================================================
+Esta guía es un acuerdo del equipo. Aplica a todo el repositorio (backend,
+frontend y docs). Objetivo: un historial ordenado, sin trabajo perdido ni
+conflictos grandes, y que cada cambio se pueda rastrear hasta una historia de
+usuario del backlog.
+
+
+--------------------------------------------------------------------------------
+1. ESTRUCTURA DE RAMAS
+--------------------------------------------------------------------------------
+
+  main        Estable. Solo recibe lo que ya está probado, al cerrar un sprint o
+              una entrega. Cada corte lleva un tag. Nadie hace push directo.
+
+  develop     Rama de integración. Aquí se junta todo el trabajo del sprint.
+              Nadie hace push directo: solo entra trabajo mediante Pull Request.
+              Es la rama por defecto del repositorio.
+
+  feature/*   Una rama corta por historia de usuario (o parte de ella). Siempre
+              se crea desde develop y siempre vuelve a develop.
+
+Esquema:
+
+  main      o-----------------------o-------------------o     (entregas, tags)
+             \                     /                   /
+  develop     o--o----o----o--o---o----o--o----o------o      (integración)
+                  \  /      \ /          \     /
+  feature/*        oo        oo            o---o             (ramas cortas)
+
+Otras ramas permitidas (también salen de develop y vuelven a develop):
+
+  fix/*       Corrección de un error.
+  docs/*      Cambios solo de documentación.
+  chore/*     Tareas de soporte (dependencias, configuración).
+
+Los sprints NO tienen rama propia. Se marcan con milestones de GitHub y tags
+(ver sección 7). Una rama larga por sprint se desfasa y el merge final duele.
+
+
+--------------------------------------------------------------------------------
+2. NOMBRES DE RAMAS
+--------------------------------------------------------------------------------
+
+Formato:   <tipo>/<area>-<historia>-<descripcion-corta>
+
+  - Todo en minúsculas, sin tildes ni espacios; palabras separadas con guiones.
+  - area: backend, frontend, db o docs.
+  - historia: el código de la historia de usuario (hu2.2) cuando exista.
+
+Ejemplos buenos:
+  feature/backend-hu2.2-crear-producto
+  feature/backend-hu1.9-direcciones-cliente
+  feature/frontend-hu2.1-listado-categorias
+  fix/backend-total-pedido-redondeo
+  docs/manual-instalacion
+  chore/actualizar-dependencias
+
+Ejemplos malos:
+  juanjo-dev                  (rama personal de larga vida)
+  cambios                     (no dice nada)
+  feature/Arreglo De Cosas    (mayúsculas y espacios)
+
+
+--------------------------------------------------------------------------------
+3. FLUJO PARA TRABAJAR UNA HISTORIA
+--------------------------------------------------------------------------------
+
+Paso 1. Parte siempre de develop actualizada.
+
+    git switch develop
+    git pull
+
+Paso 2. Crea tu rama.
+
+    git switch -c feature/backend-hu2.2-crear-producto
+
+Paso 3. Trabaja y haz commits pequeños y frecuentes (ver sección 4).
+
+    git add <archivos>
+    git commit -m "feat(menu): crear producto con categoría"
+
+Paso 4. Antes de abrir el Pull Request, actualiza tu rama con lo último de
+develop, para resolver los conflictos tú y no quien revisa.
+
+    git fetch
+    git rebase origin/develop
+
+  (Si el rebase se complica, la alternativa más simple es
+   "git merge origin/develop". Deja un commit extra, pero es válido.)
+
+Paso 5. Corre las pruebas y verifica que todo funciona.
+
+    cd backend
+    pytest
+    python manage.py check
+    python manage.py makemigrations --check      (no debe quedar nada pendiente)
+
+Paso 6. Sube la rama.
+
+    git push -u origin feature/backend-hu2.2-crear-producto
+
+  Si ya habías subido la rama y luego hiciste rebase, usa:
+    git push --force-with-lease
+  (SOLO en tu propia rama de feature, nunca en main ni en develop.)
+
+Paso 7. Abre el Pull Request en GitHub hacia develop (ver sección 5).
+
+Paso 8. Después del merge, limpia.
+
+    git switch develop
+    git pull
+    git branch -d feature/backend-hu2.2-crear-producto
+
+Reglas de oro:
+  - Una rama = una historia (o una parte pequeña de ella). Si dura más de unos
+    días, divídela.
+  - Nunca trabajes directamente sobre develop ni main.
+  - Haz pull de develop cada día que trabajes en la rama.
+
+
+--------------------------------------------------------------------------------
+4. COMMITS
+--------------------------------------------------------------------------------
+
+Formato del mensaje:
+
+    <tipo>(<alcance>): <descripción corta>
+
+    <cuerpo opcional: qué y por qué, no cómo>
+
+    Refs: HU-2.2
+
+Tipos:
+  feat       Funcionalidad nueva.
+  fix        Corrección de un error.
+  docs       Solo documentación.
+  test       Pruebas nuevas o modificadas.
+  refactor   Reorganización del código sin cambiar su comportamiento.
+  chore      Tareas de soporte: dependencias, configuración, migraciones sin
+             lógica nueva.
+  style      Formato (espacios, comas) sin cambio de lógica.
+
+Alcance: la app o el área que cambia. Ejemplos: usuarios, sedes, menu,
+inventario, cobertura, promociones, pedidos, notificaciones, reportes,
+frontend, db, docs.
+
+Reglas para la descripción:
+  - En español, en minúsculas, sin punto final.
+  - En modo imperativo o presente: "crear", "agrega", no "creé" ni "creando".
+  - Máximo unos 70 caracteres.
+  - Debe decir QUÉ hace el commit, no cómo.
+
+Ejemplos buenos:
+  feat(menu): crear producto con categoría y opciones
+  fix(pedidos): corregir cálculo del total con descuento
+  test(inventario): verificar que agotado se calcula con stock cero
+  docs: agregar guía de trabajo con Git
+  chore(backend): actualizar dependencias de Django
+  refactor(pedidos): extraer cálculo de totales a services.py
+
+Ejemplos malos:
+  arreglos
+  cambios varios
+  wip
+  listo por fin
+  fix
+
+Buenas prácticas:
+  - Un commit = un cambio lógico. No mezclar en el mismo commit una funcionalidad
+    nueva con un arreglo no relacionado ni con formato.
+  - Haz commit con frecuencia; es más fácil juntar commits pequeños que
+    separar uno gigante.
+  - Revisa lo que vas a subir ANTES de hacer commit:
+
+        git status
+        git diff --staged
+
+  - Nunca subas: archivos .env, contraseñas, claves, la base db.sqlite3, la
+    carpeta .venv ni node_modules. El .gitignore ya los excluye; si alguno
+    aparece en "git status", detente y avisa.
+  - Si subiste un secreto por error, borrar el commit NO basta: el secreto ya
+    quedó expuesto. Cámbialo de inmediato (nueva contraseña o clave) y avisa al
+    equipo.
+
+
+--------------------------------------------------------------------------------
+5. PULL REQUESTS
+--------------------------------------------------------------------------------
+
+Destino: siempre develop (salvo el cierre de sprint, que va de develop a main).
+
+Título: igual que un commit.
+    feat(menu): HU-2.2 crear producto con categoría y opciones
+
+Descripción: usa la plantilla del repositorio (.github/PULL_REQUEST_TEMPLATE.md):
+  - Qué hace el PR.
+  - Historia de usuario relacionada.
+  - Cómo probarlo.
+  - Checklist.
+
+Antes de pedir revisión, verifica:
+  [ ] La rama está actualizada con develop.
+  [ ] Las pruebas pasan (pytest) y "python manage.py check" no da errores.
+  [ ] Si cambié modelos, incluí su migración en el mismo PR.
+  [ ] No subí secretos ni archivos locales.
+  [ ] Actualicé la documentación si cambió algo relevante (modelo de datos, API).
+  [ ] El PR es pequeño y se centra en una sola historia.
+
+Revisión:
+  - Cada PR necesita al menos una aprobación de otro integrante.
+  - Quien escribió el código NO aprueba su propio PR.
+  - Quien revisa mira: que cumpla los criterios de aceptación de la historia, que
+    el código sea legible, que haya pruebas, que no rompa lo existente y que no
+    tenga secretos.
+  - Los comentarios se hacen con respeto y sobre el código, no sobre la persona.
+    Quien recibe comentarios los responde o corrige, y vuelve a pedir revisión.
+  - Revisar los PR de los demás es parte del trabajo, no un favor: intenta
+    responder en menos de un día.
+
+Tipo de merge:
+  feature/fix/docs/chore -> develop   "Squash and merge" (queda un solo commit
+                                      limpio por historia; deja la HU en el
+                                      mensaje).
+  develop -> main                     "Create a merge commit" (sin squash, para
+                                      conservar el historial de cada sprint).
+
+Después del merge, borra la rama (GitHub ofrece el botón).
+
+
+--------------------------------------------------------------------------------
+6. REGLAS ESPECIALES PARA DJANGO (MIGRACIONES)
+--------------------------------------------------------------------------------
+
+Las migraciones son la fuente de conflictos más común en equipos con Django.
+
+  1. Los cambios en models.py y su migración van en el MISMO Pull Request.
+     Nunca se sube un modelo modificado sin su migración.
+  2. Las migraciones (backend/apps/*/migrations/) SÍ se suben a Git.
+  3. Haz "git pull" de develop antes de correr "makemigrations", para partir de
+     la última migración existente.
+  4. No edites ni borres migraciones que ya estén en develop: alguien más pudo
+     haberlas aplicado. Si te equivocaste, crea una migración nueva que lo
+     corrija.
+  5. Si dos personas generaron migraciones al mismo tiempo en la misma app,
+     aparece un conflicto de "múltiples nodos hoja". Se resuelve así:
+
+         git switch develop && git pull
+         git switch tu-rama && git rebase origin/develop
+         python manage.py makemigrations --merge
+
+  6. Antes de cambiar la estructura de una tabla ya existente (agregar,
+     quitar o renombrar campos), avisa en el grupo del equipo.
+  7. Solo UNA persona (la designada por el equipo) ejecuta "migrate" contra la
+     base de datos de Supabase. Cada integrante usa su propia SQLite local:
+
+         DATABASE_URL=sqlite:///db.sqlite3
+
+     Nadie crea ni modifica tablas a mano en el panel de Supabase.
+  8. Después de migrar en Supabase, verifica que RLS siga activado en todas las
+     tablas.
+
+
+--------------------------------------------------------------------------------
+7. SPRINTS, ENTREGAS Y TAGS
+--------------------------------------------------------------------------------
+
+  - Crea un milestone de GitHub por sprint ("Sprint 1", "Sprint 2", ...) y asigna
+    a él los issues y Pull Requests correspondientes.
+  - Al cerrar cada sprint, tras la Sprint Review:
+
+        1. Abrir un Pull Request de develop a main.
+        2. Revisarlo entre todos y hacer "Create a merge commit".
+        3. Poner el tag sobre main:
+
+               git switch main
+               git pull
+               git tag sprint-1
+               git push origin sprint-1
+
+  - Para las entregas del curso, usa además un tag específico:
+        entrega-1   (PMV, al terminar el Sprint 2 o 3)
+        entrega-2   (versión mejorada, al terminar el Sprint 4)
+  - Lo que se presenta al profesor es siempre lo que está en main con su tag.
+
+
+--------------------------------------------------------------------------------
+8. SITUACIONES COMUNES Y CÓMO RESOLVERLAS
+--------------------------------------------------------------------------------
+
+"Hice commits en develop (o en main) por error y aún no hice push"
+
+    git switch -c feature/backend-mi-rama      (la rama nueva se queda con tus commits)
+    git switch develop
+    git reset --hard origin/develop            (develop vuelve a ser igual a la remota)
+
+"Quiero deshacer mi último commit pero conservar los cambios"
+
+    git reset --soft HEAD~1
+
+"Tengo cambios sin terminar y necesito cambiar de rama"
+
+    git stash                                  (los guarda aparte)
+    git switch otra-rama
+    ... luego, al volver ...
+    git stash pop                              (los recupera)
+
+"Al hacer push me dice: rejected (fetch first)"
+  La rama remota tiene commits que tú no tienes. Trae los cambios y reintenta:
+
+    git pull --rebase
+    git push
+
+"Mi rebase tiene conflictos"
+  1. Git marca los archivos en conflicto (git status los lista).
+  2. Abre cada archivo y elige qué dejar entre las marcas <<<<<<<, ======= y
+     >>>>>>>. Borra las marcas.
+  3. Marca el archivo como resuelto y continúa:
+
+         git add <archivo>
+         git rebase --continue
+
+  4. Si todo sale mal y quieres volver a empezar:
+
+         git rebase --abort
+
+"Subí un archivo que no debía (sin secretos)"
+  Bórralo del repositorio sin borrarlo de tu disco, agrégalo al .gitignore y
+  haz commit:
+
+    git rm --cached <archivo>
+    git commit -m "chore: dejar de versionar <archivo>"
+
+"No sé en qué rama estoy ni qué cambió"
+
+    git status -sb
+    git branch
+    git log --oneline -10
+
+
+--------------------------------------------------------------------------------
+9. CONFIGURACIÓN INICIAL (una sola vez por integrante)
+--------------------------------------------------------------------------------
+
+    git config --global user.name  "Tu Nombre"
+    git config --global user.email "tu-correo@ejemplo.com"
+    git config --global pull.rebase true
+
+Para obtener el proyecto, se CLONA (no se hace "git init"):
+
+    git clone git@github.com:juanjose-atuesta/DomiPedidosX.git
+    cd DomiPedidosX
+    git switch develop
+
+Luego, para el backend:
+
+    cd backend
+    python -m venv .venv
+    source .venv/bin/activate          (en Windows: .venv\Scripts\activate)
+    pip install -r requirements/dev.txt
+    cp .env.example .env               (y editar SECRET_KEY)
+    python manage.py migrate
+
+
+--------------------------------------------------------------------------------
+10. RESUMEN RÁPIDO
+--------------------------------------------------------------------------------
+
+  1. develop actualizada  ->  2. rama feature/...  ->  3. commits pequeños con
+  formato tipo(alcance): descripción  ->  4. rebase con develop  ->  5. pruebas
+  -> 6. push  ->  7. Pull Request a develop  ->  8. revisión de otra persona  ->
+  9. squash and merge  ->  10. borrar la rama.
+
+  Nunca: push directo a main o develop, ramas personales largas, secretos en
+  commits, migraciones editadas después de subidas, ni aprobar tu propio PR.
+
+================================================================================
+FIN
+================================================================================
