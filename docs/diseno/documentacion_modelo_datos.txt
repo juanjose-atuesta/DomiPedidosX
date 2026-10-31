@@ -1,0 +1,728 @@
+================================================================================
+DOMIPEDIDOSX - DOCUMENTACION DEL MODELO DE DATOS
+================================================================================
+Base de datos: 23 tablas propias (SQLite en local, PostgreSQL/Supabase en el
+entorno desplegado). Los modelos estan en backend/apps/<app>/models.py.
+
+Este documento explica, por cada tabla:
+  - para que existe,
+  - que significa cada atributo,
+  - como se relaciona (conceptualmente) con las demas tablas,
+  - que reglas ya garantiza la base de datos y cuales debe garantizar el codigo.
+
+
+--------------------------------------------------------------------------------
+0. COMO LEER ESTE DOCUMENTO
+--------------------------------------------------------------------------------
+
+Nombres de tabla
+  Django nombra las tablas <app>_<modelo en minuscula>. Ej: la clase Producto de
+  la app "menu" es la tabla menu_producto.
+
+Glosario
+  PK (clave primaria)  Identificador unico de cada fila.
+  FK (clave foranea)   Columna que apunta a la PK de otra tabla. Es la forma de
+                       "relacionar" tablas. La FK siempre esta en el lado
+                       "muchos": un pedido tiene UNA sede, una sede tiene MUCHOS
+                       pedidos, entonces la FK sede_id esta en pedidos_pedido.
+  1-N                  Uno a muchos.   N-M  Muchos a muchos (usa tabla puente).
+  1-1                  Uno a uno.
+  Snapshot             Copia de un dato al momento de una compra (nombre,
+                       precio, direccion). Se guarda para que el historial no
+                       cambie si despues se edita o desactiva el original.
+  Borrado logico       No se borra la fila: se marca como inactiva (activa,
+                       is_active, disponible = false). Asi no se pierde historia.
+
+Que pasa al borrar un registro padre (on_delete)
+  CASCADE   Se borran tambien los hijos (el hijo no tiene sentido sin el padre).
+  PROTECT   La base de datos NO deja borrar el padre mientras tenga hijos
+            (hay historia que cuidar).
+  SET_NULL  El hijo sobrevive y su FK queda vacia (NULL).
+
+Columnas comunes (aparecen en casi todas las tablas, no se repiten abajo)
+  Las tablas marcadas [UUID+fechas] heredan de la clase abstracta ModeloUUID:
+    id              UUID. Identificador unico no secuencial (no se puede adivinar
+                    ni enumerar desde fuera).
+    creado_en       Fecha y hora de creacion (automatica).
+    actualizado_en  Fecha y hora de la ultima modificacion (automatica).
+  Las tablas marcadas [id numerico] usan un id entero autoincremental.
+  Las tablas que no dicen nada tienen su propia clave, indicada en cada una.
+
+Tipos usados en este documento
+  texto corto   (varchar)       texto largo (text)      entero
+  decimal(10,2) dinero          decimal(10,8)/(11,8) latitud/longitud
+  si/no         (booleano)      fecha/hora con zona horaria (America/Bogota)
+
+
+--------------------------------------------------------------------------------
+1. MAPA GENERAL (ideas centrales)
+--------------------------------------------------------------------------------
+
+Dominios y tablas
+  Configuracion   core_configuracionglobal
+  Usuarios        usuarios_user, usuarios_direccion, usuarios_perfilrepartidor
+  Sedes           sedes_sede, sedes_sedeusuario, sedes_horarioatencion,
+                  sedes_feriado
+  Menu            menu_categoria, menu_producto, menu_productocombo,
+                  menu_grupoopcion, menu_opcionproducto
+  Inventario      inventario_inventariosede
+  Cobertura       cobertura_zonacobertura, cobertura_capacidadfranja
+  Promociones     promociones_promocion, promociones_promocionproducto
+  Pedidos         pedidos_pedido, pedidos_detallepedido,
+                  pedidos_detallepedidoopcion, pedidos_historialestado
+  Notificaciones  notificaciones_notificacion
+
+Los cuatro "centros" del modelo (tablas a las que apuntan muchas otras)
+  usuarios_user   Quien interactua: cliente, operador, cocina, repartidor, admin.
+  sedes_sede      Cada local fisico del restaurante.
+  menu_producto   Lo que se vende.
+  pedidos_pedido  Donde todo converge: un pedido une a un cliente, una sede, una
+                  direccion, una zona, un repartidor y una promocion, y de el
+                  cuelgan sus productos, su historial y sus notificaciones.
+
+Orden de dependencia (una tabla solo puede apuntar a las de arriba)
+  core -> usuarios -> sedes -> menu -> inventario / cobertura / promociones
+       -> pedidos -> notificaciones
+
+Cadena de un pedido (util para entender cualquier servicio)
+  usuarios_user (cliente) --> pedidos_pedido --> pedidos_detallepedido
+      --> menu_producto --> inventario_inventariosede (stock en esa sede)
+  Cada servicio que se escriba (crear pedido, descontar stock, calcular total,
+  cancelar) toca alguna parte de esta cadena.
+
+
+================================================================================
+2. CONFIGURACION
+================================================================================
+
+--------------------------------------------------------------------------------
+core_configuracionglobal            (PK: clave)
+--------------------------------------------------------------------------------
+Proposito: parametros globales del sistema guardados como pares clave/valor,
+para que el administrador los cambie sin tocar codigo (seccion 4.6 del enunciado:
+horarios, tarifas, parametros de notificaciones). Ejemplos de claves:
+'moneda' = 'COP', 'asignacion_repartidor_automatica' = 'false'.
+
+Atributos
+  clave           Nombre unico del parametro. Es la clave primaria.
+  valor           El valor, siempre como texto (el codigo debe convertirlo a
+                  numero o booleano al usarlo).
+  descripcion     Explicacion de para que sirve el parametro.
+  actualizado_en  Cuando se modifico por ultima vez.
+
+Relaciones: ninguna. Es una tabla independiente.
+Reglas de BD: la clave no puede repetirse.
+Pendiente del codigo: validar que el valor tenga sentido para cada clave.
+
+
+================================================================================
+3. USUARIOS
+================================================================================
+
+--------------------------------------------------------------------------------
+usuarios_user                       [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: toda persona que usa el sistema. Reemplaza al usuario por defecto de
+Django (AUTH_USER_MODEL = "usuarios.User"). El campo "rol" decide que puede
+hacer cada persona (HU-1.7). Se inicia sesion con el email.
+
+Atributos
+  nombre, apellido  Nombre de la persona.
+  email             Correo. Unico y siempre en minusculas. Es el "usuario" del
+                    login y el destino de las notificaciones por correo.
+  telefono          Contacto (HU-1.8: el cliente puede editarlo).
+  rol               Uno de: cliente, operador, cocina, repartidor, admin.
+                    Define a que modulos accede cada persona.
+  password          Hash de la contrasena (nunca el texto original). Lo maneja
+                    Django (set_password / check_password).
+  last_login        Ultimo inicio de sesion (lo llena Django).
+  is_active         Si el usuario puede entrar. False = "desactivado"
+                    (HU-1.10): no se borra, para conservar su historial.
+  is_staff          Si puede entrar al panel /admin de Django (no es lo mismo
+                    que el rol admin del negocio).
+  is_superuser      Permisos totales de Django (lo usa createsuperuser).
+
+Relaciones
+  1-N  usuarios_direccion          Un cliente tiene varias direcciones guardadas.
+  1-1  usuarios_perfilrepartidor   Solo los repartidores tienen perfil.
+  N-M  sedes_sede (via sedes_sedeusuario)
+                                   El personal operativo se asigna a sedes.
+  1-N  pedidos_pedido              Aparece TRES veces en un pedido, con
+                                   significados distintos:
+                                     cliente      quien pidio
+                                     creado_por   quien registro el pedido (el
+                                                  cliente o un operador)
+                                     repartidor   quien lo entrega
+  1-N  pedidos_historialestado     Quien cambio el estado de un pedido.
+  1-N  notificaciones_notificacion Destinatario de una notificacion.
+Reglas de BD: email unico.
+Pendiente del codigo: validar que el rol sea coherente (p. ej. que un pedido
+  solo tenga como repartidor a un usuario con rol repartidor).
+
+--------------------------------------------------------------------------------
+usuarios_direccion                  [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: direcciones de entrega que un cliente guarda para no escribirlas en
+cada pedido (HU-1.9). Estan georreferenciadas (latitud/longitud) porque el
+sistema valida si caen dentro de una zona de cobertura.
+
+Atributos
+  cliente         FK a usuarios_user. A quien pertenece la direccion.
+                  CASCADE: si se borra el usuario, se borran sus direcciones.
+  alias           Nombre corto elegido por el cliente: 'Casa', 'Trabajo'.
+  direccion_texto La direccion escrita.
+  detalles        Indicaciones extra (apartamento, porteria, referencias).
+  latitud, longitud  Ubicacion en el mapa. Obligatorias.
+  es_principal    Si es la direccion preferida del cliente.
+  activa          Borrado logico: false = el cliente la "elimino" pero los
+                  pedidos viejos no se afectan.
+
+Relaciones
+  N-1  usuarios_user      Pertenece a un unico cliente.
+  1-N  pedidos_pedido     Un pedido puede apuntar a la direccion usada. Si la
+                          direccion se borra, el pedido sobrevive (SET_NULL)
+                          porque ademas guarda su propia copia (snapshot).
+Reglas de BD: un cliente no puede tener DOS direcciones principales activas.
+
+--------------------------------------------------------------------------------
+usuarios_perfilrepartidor           (PK: usuario)
+--------------------------------------------------------------------------------
+Proposito: datos que solo tienen los repartidores: si estan disponibles (para
+la asignacion automatica de pedidos) y su ubicacion aproximada (mapa opcional
+durante la entrega).
+
+Atributos
+  usuario         PK y FK a usuarios_user (relacion 1-1). CASCADE.
+  disponible      Si el repartidor puede recibir un pedido ahora.
+  latitud, longitud  Ultima ubicacion conocida (opcional).
+  ubicacion_actualizada_en  Cuando se registro esa ubicacion.
+
+Relaciones
+  1-1  usuarios_user      Cada repartidor tiene como maximo un perfil.
+Pendiente del codigo: crear el perfil al crear un usuario con rol repartidor.
+
+
+================================================================================
+4. SEDES
+================================================================================
+
+--------------------------------------------------------------------------------
+sedes_sede                          [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: cada local fisico del restaurante (HU-8.1 a 8.3). Casi todo el
+negocio es "por sede": inventario, capacidad, zonas, pedidos.
+
+Atributos
+  nombre          Nombre de la sede.
+  direccion       Direccion fisica.
+  telefono        Telefono de contacto (opcional).
+  latitud, longitud  Ubicacion en el mapa (opcional). Sirve para sugerir la sede
+                  mas cercana cuando otra supera su capacidad.
+  activa          False = la sede deja de recibir pedidos sin perder su
+                  historial (HU-8.3).
+
+Relaciones (es uno de los cuatro centros del modelo)
+  1-N  sedes_horarioatencion     Sus horarios por dia.
+  1-N  sedes_feriado             Sus dias de cierre.
+  N-M  usuarios_user (via sedes_sedeusuario)   Su personal.
+  1-N  inventario_inventariosede Que productos vende y cuanto stock tiene.
+  1-N  cobertura_zonacobertura   Las zonas a las que entrega.
+  1-N  cobertura_capacidadfranja Sus topes de pedidos por franja horaria.
+  1-N  promociones_promocion     Promociones propias (o NULL = de todas).
+  1-N  pedidos_pedido            Los pedidos que prepara (PROTECT: una sede con
+                                 pedidos no puede borrarse; se desactiva).
+  1-N  notificaciones_notificacion  Alertas dirigidas a la sede.
+
+--------------------------------------------------------------------------------
+sedes_sedeusuario                   [id numerico]
+--------------------------------------------------------------------------------
+Proposito: tabla puente N-M entre usuarios y sedes. Dice a que sede(s) pertenece
+cada miembro del personal (operador, cocina, repartidor). Con esto un operador
+solo gestiona SU sede (HU-1.7 y todas las historias "en mi sede").
+
+Atributos
+  usuario   FK a usuarios_user (CASCADE).
+  sede      FK a sedes_sede (CASCADE).
+Relaciones: une usuarios_user con sedes_sede.
+Reglas de BD: la misma pareja (usuario, sede) no puede repetirse.
+Pendiente del codigo: que las vistas del operador filtren siempre por las sedes
+  asignadas al usuario que hace la peticion.
+
+--------------------------------------------------------------------------------
+sedes_horarioatencion               [id numerico]
+--------------------------------------------------------------------------------
+Proposito: en que dias y horas esta abierta una sede (HU-8.1). Una sede tiene
+varios (uno por dia, o varios tramos por dia), por eso es tabla aparte y no un
+campo de la sede.
+
+Atributos
+  sede           FK a sedes_sede (CASCADE).
+  dia_semana     1 = lunes ... 7 = domingo.
+  hora_apertura  Hora a la que abre.
+  hora_cierre    Hora a la que cierra.
+Relaciones: N-1 con sedes_sede.
+Reglas de BD: dia entre 1 y 7; hora_cierre debe ser mayor que hora_apertura.
+Pendiente del codigo: evitar tramos traslapados el mismo dia; aplicar los
+  feriados por encima del horario normal.
+
+--------------------------------------------------------------------------------
+sedes_feriado                       [id numerico]
+--------------------------------------------------------------------------------
+Proposito: dias especiales en los que una sede (o todas) no atiende.
+
+Atributos
+  sede     FK a sedes_sede (CASCADE). Puede quedar VACIA: significa que el
+           feriado aplica a todas las sedes.
+  fecha    El dia.
+  nombre   Descripcion ('Navidad', 'Mantenimiento').
+  cerrado  True = cerrado todo el dia.
+Relaciones: N-1 opcional con sedes_sede.
+
+
+================================================================================
+5. MENU
+================================================================================
+
+--------------------------------------------------------------------------------
+menu_categoria                      [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: agrupar productos para que el cliente los encuentre por tipo
+(HU-2.1): hamburguesas, bebidas, postres...
+
+Atributos
+  nombre       Nombre de la categoria.
+  descripcion  Texto opcional.
+  orden        Posicion en que se muestra en el menu (menor = primero).
+  activa       Si se muestra o no.
+Relaciones: 1-N con menu_producto.
+
+--------------------------------------------------------------------------------
+menu_producto                       [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: lo que se vende (HU-2.2 a 2.4). Los combos tambien son productos
+(es_combo = true). El producto es "global": la informacion comun a todas las
+sedes. Lo que depende de la sede (stock, disponibilidad) esta en
+inventario_inventariosede.
+
+Atributos
+  categoria               FK a menu_categoria (SET_NULL: si se borra la
+                          categoria, el producto sigue existiendo sin categoria).
+  nombre                  Nombre del producto.
+  descripcion             Detalle que ve el cliente antes de pedir.
+  precio_base             Precio del producto sin opciones (decimal, >= 0).
+  imagen_url              Enlace a la imagen (se guardaran en Cloudinary).
+  tiempo_preparacion_min  Minutos que toma prepararlo. Se usa para calcular el
+                          tiempo estimado de entrega (debe ser > 0).
+  es_combo                True si es un combo (su composicion esta en
+                          menu_productocombo).
+  disponible              Interruptor global: false = el producto se desactiva
+                          en todo el sistema sin perder el historial de ventas
+                          (HU-2.4). No se borra.
+
+Relaciones (otro de los cuatro centros)
+  N-1  menu_categoria              Pertenece a una categoria.
+  1-N  menu_grupoopcion            Sus grupos de personalizacion.
+  N-M  si mismo (via menu_productocombo)  Si es combo, que productos contiene.
+  1-N  inventario_inventariosede   En que sedes se vende y con cuanto stock.
+  N-M  promociones_promocion (via promociones_promocionproducto)
+                                   Promociones a las que aplica.
+  1-N  pedidos_detallepedido       Lineas de pedido que lo contienen (PROTECT:
+                                   un producto vendido no se puede borrar).
+Reglas de BD: precio >= 0; tiempo de preparacion > 0.
+
+--------------------------------------------------------------------------------
+menu_productocombo                  [id numerico]
+--------------------------------------------------------------------------------
+Proposito: define de que esta hecho un combo (HU-2.7). Es una tabla puente de un
+producto consigo mismo: "el combo X incluye N unidades del producto Y".
+
+Atributos
+  combo     FK a menu_producto: el producto que es combo (CASCADE).
+  producto  FK a menu_producto: un producto que forma parte del combo (CASCADE).
+  cantidad  Cuantas unidades de ese producto trae el combo (> 0).
+Relaciones: dos FK a la misma tabla (menu_producto), con roles distintos.
+Reglas de BD: la pareja (combo, producto) no se repite; un combo no puede
+  contenerse a si mismo; cantidad > 0.
+Pendiente del codigo: validar que "combo" tenga es_combo = true y evitar ciclos
+  indirectos (un combo que contiene otro combo que lo contiene a el).
+
+--------------------------------------------------------------------------------
+menu_grupoopcion                    [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: agrupar las opciones de personalizacion de un producto (HU-2.5):
+"Tamano", "Adiciones", "Quitar ingredientes". Es el primer nivel; las opciones
+concretas estan en menu_opcionproducto.
+
+Atributos
+  producto         FK a menu_producto (CASCADE).
+  nombre           Titulo del grupo que ve el cliente.
+  tipo             tamano, adicion o excluible.
+  obligatorio      Si el cliente DEBE elegir algo de este grupo (p. ej. tamano).
+  max_selecciones  Cuantas opciones puede elegir como maximo (>= 1). Tamano: 1.
+                   Adiciones: varias.
+  orden            Orden de aparicion.
+Relaciones: N-1 con menu_producto; 1-N con menu_opcionproducto.
+
+--------------------------------------------------------------------------------
+menu_opcionproducto                 [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: cada opcion elegible dentro de un grupo: 'Grande', 'Queso extra',
+'Sin cebolla'.
+
+Atributos
+  grupo             FK a menu_grupoopcion (CASCADE).
+  nombre            Nombre de la opcion.
+  precio_adicional  Cuanto se suma al precio (0 si es gratis; >= 0).
+  activa            Si se ofrece actualmente.
+  orden             Orden de aparicion.
+Relaciones
+  N-1  menu_grupoopcion
+  1-N  pedidos_detallepedidoopcion  Las veces que fue elegida en un pedido. Si
+                                    la opcion se borra, la linea del pedido
+                                    conserva su copia (SET_NULL).
+
+
+================================================================================
+6. INVENTARIO
+================================================================================
+
+--------------------------------------------------------------------------------
+inventario_inventariosede           [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: une un producto con una sede y guarda lo que depende de AMBOS:
+si ese producto se vende en esa sede y cuantas unidades hay (HU-2.6 y
+HU-3.1 a 3.5). Si NO existe la fila (sede, producto), ese producto no se vende
+en esa sede.
+
+Atributos
+  sede                FK a sedes_sede (CASCADE).
+  producto            FK a menu_producto (CASCADE).
+  disponible_en_sede  Interruptor del operador: "hoy no lo ofrezco aqui".
+  controla_stock      Si se llevan existencias de este producto. False = se
+                      vende sin limite (p. ej. una bebida preparada al momento).
+  stock_actual        Unidades disponibles (>= 0). El servicio de pedidos lo
+                      descuenta al confirmar un pedido (HU-3.4).
+  stock_minimo        Umbral de reabastecimiento (HU-3.2). Por defecto 5.
+  agotado             CALCULADO por la base de datos (no se escribe a mano):
+                      true si controla_stock y stock_actual <= 0. Es lo que
+                      usa el menu para marcar "agotado" (HU-3.5).
+  stock_bajo          CALCULADO: true si controla_stock y
+                      stock_actual <= stock_minimo. Dispara la alerta de
+                      reabastecimiento (HU-3.3).
+Relaciones: N-1 con sedes_sede y N-1 con menu_producto (es la tabla puente
+  entre ambas, con datos propios).
+Reglas de BD: la pareja (sede, producto) no se repite; stock >= 0.
+Pendiente del codigo: descontar y devolver stock dentro de una transaccion,
+  generar la notificacion de stock bajo, y mostrar un producto como disponible
+  solo si disponible_en_sede y no agotado.
+
+
+================================================================================
+7. COBERTURA
+================================================================================
+
+--------------------------------------------------------------------------------
+cobertura_zonacobertura             [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: define a que areas entrega una sede y en que condiciones: tarifa,
+tiempo estimado y pedido minimo (seccion 4.5). El sistema rechaza direcciones
+fuera de cualquier zona.
+
+Atributos
+  sede                 FK a sedes_sede (CASCADE).
+  nombre               Nombre de la zona ('Norte', 'Centro').
+  tipo                 'radio' o 'poligono': como se define el area.
+  centro_lat, centro_lng, radio_km
+                       Solo si tipo = radio: un circulo alrededor de un punto.
+  poligono             Solo si tipo = poligono: lista de puntos
+                       [[lat, lng], ...] que forman el contorno (JSON).
+  tarifa_domicilio     Costo del domicilio en esta zona (>= 0).
+  tiempo_estimado_min  Minutos base de entrega en esta zona (> 0). El tiempo
+                       final suma la carga de cocina y la preparacion.
+  pedido_minimo        Valor minimo del pedido para entregar aqui (>= 0).
+  activa               Si la zona esta habilitada.
+Relaciones
+  N-1  sedes_sede
+  1-N  pedidos_pedido    Zona aplicada a un pedido (SET_NULL).
+Reglas de BD: segun el tipo, los campos geometricos obligatorios deben estar
+  completos (radio: centro y radio > 0; poligono: poligono presente).
+Pendiente del codigo: el calculo "esta esta direccion dentro de la zona"
+  (distancia al centro para radio; punto-en-poligono para poligono).
+
+--------------------------------------------------------------------------------
+cobertura_capacidadfranja           [id numerico]
+--------------------------------------------------------------------------------
+Proposito: limita cuantos pedidos puede atender una cocina a la vez en una
+franja horaria (p. ej. maximo 20 pedidos en preparacion en la hora de almuerzo).
+Evita la sobredemanda en horas pico (seccion 4.5).
+
+Atributos
+  sede                     FK a sedes_sede (CASCADE).
+  dia_semana               1 = lunes ... 7 = domingo.
+  hora_inicio, hora_fin    Franja a la que aplica el tope.
+  max_pedidos_simultaneos  Tope de pedidos (> 0).
+  umbral_alerta_pct        Porcentaje del tope (1 a 100) al que se avisa al
+                           operador. Por defecto 80.
+  activa                   Si el tope esta vigente.
+Relaciones: N-1 con sedes_sede.
+Reglas de BD: hora_fin > hora_inicio; dia entre 1 y 7; tope > 0; umbral 1..100.
+Pendiente del codigo: contar los pedidos en preparacion de la sede en la franja,
+  bloquear nuevos pedidos al superar el tope, sugerir sede o franja alterna, y
+  evitar franjas traslapadas.
+
+
+================================================================================
+8. PROMOCIONES
+================================================================================
+
+--------------------------------------------------------------------------------
+promociones_promocion               [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: descuentos con vigencia, condiciones y cupo maximo diario
+(HU-2.7 y 2.8).
+
+Atributos
+  sede                  FK a sedes_sede (CASCADE). Puede quedar VACIA: la
+                        promocion aplica a todas las sedes.
+  nombre, descripcion   Que ve el cliente.
+  codigo                Codigo opcional que el cliente escribe (unico). Se guarda
+                        NULL, no texto vacio, cuando no hay codigo.
+  porcentaje_descuento  Descuento en % (entre 0 y 100). Usar este O el monto.
+  monto_descuento       Descuento en dinero (> 0). Usar este O el porcentaje.
+  pedido_minimo         Valor minimo del pedido para poder usarla (condicion).
+  cupo_maximo_diario    Cuantas veces se puede usar por dia (> 0) (HU-2.8).
+  fecha_inicio, fecha_fin  Vigencia (fin >= inicio).
+  activa                Interruptor manual.
+Relaciones
+  N-1  sedes_sede                  (opcional)
+  N-M  menu_producto (via promociones_promocionproducto)
+  1-N  pedidos_pedido              Los pedidos que la usaron (SET_NULL).
+Reglas de BD: exactamente UNO entre porcentaje y monto; fechas coherentes;
+  cupo > 0.
+Importante: el cupo USADO no se guarda aqui. Se calcula contando los pedidos
+  del dia con esta promocion que no esten cancelados. El servicio debe hacerlo
+  dentro de la misma transaccion que crea el pedido, para que dos pedidos
+  simultaneos no excedan el cupo.
+
+--------------------------------------------------------------------------------
+promociones_promocionproducto       [id numerico]
+--------------------------------------------------------------------------------
+Proposito: dice a que productos o combos aplica una promocion. Si una promocion
+no tiene filas aqui, aplica a todo el pedido.
+
+Atributos
+  promocion  FK a promociones_promocion (CASCADE).
+  producto   FK a menu_producto (CASCADE).
+Relaciones: tabla puente N-M entre promocion y producto.
+Reglas de BD: la pareja (promocion, producto) no se repite.
+
+
+================================================================================
+9. PEDIDOS
+================================================================================
+
+--------------------------------------------------------------------------------
+pedidos_pedido                      (PK: id numerico autoincremental)
+--------------------------------------------------------------------------------
+Proposito: el pedido de un cliente (HU de pedidos, kanban de cocina,
+seguimiento). Su id numerico es el numero de pedido legible (#1042). Es la
+tabla mas importante del modelo: guarda quien pide, donde se prepara, a donde va,
+como se paga y en que estado esta. Tiene tambien columnas fechas creado_en y
+actualizado_en.
+
+Atributos - quien
+  cliente            FK a usuarios_user (PROTECT). Puede quedar VACIO: cliente de
+                     mostrador o telefono que no tiene cuenta.
+  cliente_nombre, cliente_telefono
+                     Snapshot del nombre y telefono (siempre se llenan, aunque
+                     el cliente no tenga cuenta).
+  creado_por         FK a usuarios_user (PROTECT). Quien registro el pedido: el
+                     propio cliente o un operador que lo tomo por telefono.
+  canal              web, telefono o mostrador: por donde llego el pedido.
+  tipo               domicilio o recoger: si hay entrega o lo recogen en la sede.
+
+Atributos - donde
+  sede               FK a sedes_sede (PROTECT). La sede que lo prepara.
+  direccion          FK a usuarios_direccion (SET_NULL). La direccion guardada
+                     que se uso, si se uso una.
+  direccion_entrega, entrega_lat, entrega_lng
+                     Snapshot de la direccion de entrega. Aunque el cliente edite
+                     o borre su direccion despues, el pedido conserva a donde se
+                     entrego.
+  zona               FK a cobertura_zonacobertura (SET_NULL). Zona aplicada
+                     (de ahi salen tarifa y tiempo).
+  repartidor         FK a usuarios_user (PROTECT). Se llena al asignarlo.
+  promocion          FK a promociones_promocion (SET_NULL). Promocion usada.
+
+Atributos - estado y dinero
+  estado             recibido, en_preparacion, listo_despacho, en_camino,
+                     entregado o cancelado (las columnas del tablero kanban).
+  metodo_pago        efectivo, tarjeta o transferencia (el pago es simulado).
+  subtotal           Suma de las lineas del pedido (>= 0).
+  costo_domicilio    Tarifa de la zona (>= 0).
+  descuento          Descuento aplicado por la promocion (>= 0).
+  total              subtotal + costo_domicilio - descuento.
+  tiempo_estimado_entrega  Fecha/hora estimada de entrega que ve el cliente.
+  observaciones      Notas del cliente.
+  motivo_cancelacion Por que se cancelo (si aplica).
+
+Relaciones (la tabla donde todo converge)
+  N-1  usuarios_user (x3: cliente, creado_por, repartidor)
+  N-1  sedes_sede, usuarios_direccion, cobertura_zonacobertura,
+       promociones_promocion
+  1-N  pedidos_detallepedido        Los productos del pedido.
+  1-N  pedidos_historialestado      Cada cambio de estado.
+  1-N  notificaciones_notificacion  Avisos generados por el pedido.
+Reglas de BD
+  - total debe ser igual a subtotal + costo_domicilio - descuento.
+  - subtotal, costo_domicilio y descuento no pueden ser negativos.
+  - Un pedido de tipo domicilio debe tener direccion_entrega, entrega_lat y
+    entrega_lng.
+Pendiente del codigo (servicios)
+  Validar horario y feriados de la sede; validar cobertura y pedido minimo de
+  la zona; validar capacidad de la franja; validar existencias; calcular totales
+  y tiempo estimado; aplicar promocion y su cupo; descontar stock; registrar el
+  historial; y controlar que solo se pueda cancelar antes de iniciar la
+  preparacion.
+
+--------------------------------------------------------------------------------
+pedidos_detallepedido               (PK: id UUID)
+--------------------------------------------------------------------------------
+Proposito: una linea del pedido: "2 hamburguesas". Guarda copia del nombre y del
+precio, para que el historial no cambie si luego se edita el producto.
+
+Atributos
+  pedido           FK a pedidos_pedido (CASCADE).
+  producto         FK a menu_producto (PROTECT: un producto vendido no se borra).
+  nombre_producto  Snapshot del nombre al momento de la compra.
+  cantidad         Unidades (> 0).
+  precio_unitario  Snapshot del precio del producto, SIN opciones (>= 0).
+  subtotal         Total de la linea, incluyendo las opciones elegidas (>= 0).
+  notas_producto   Nota libre para cocina ('bien cocido').
+Relaciones
+  N-1  pedidos_pedido, N-1 menu_producto
+  1-N  pedidos_detallepedidoopcion   Las opciones elegidas en esta linea.
+Pendiente del codigo: que subtotal = cantidad x (precio_unitario + opciones).
+
+--------------------------------------------------------------------------------
+pedidos_detallepedidoopcion         (PK: id UUID)
+--------------------------------------------------------------------------------
+Proposito: las opciones que el cliente eligio en una linea del pedido (tamano
+grande, queso extra, sin cebolla), con copia del nombre y del precio.
+
+Atributos
+  detalle           FK a pedidos_detallepedido (CASCADE).
+  opcion            FK a menu_opcionproducto (SET_NULL): la opcion original, si
+                    aun existe.
+  nombre_opcion     Snapshot del nombre.
+  precio_adicional  Snapshot del recargo.
+Relaciones: N-1 con pedidos_detallepedido y N-1 (opcional) con
+  menu_opcionproducto.
+Pendiente del codigo: validar que las opciones pertenezcan al producto, respeten
+  max_selecciones y cubran los grupos obligatorios.
+
+--------------------------------------------------------------------------------
+pedidos_historialestado             (PK: id UUID)
+--------------------------------------------------------------------------------
+Proposito: bitacora de cada cambio de estado de un pedido, con hora y autor.
+De aqui salen los tiempos por etapa (cuanto tardo la cocina, cuanto el
+repartidor) y el desempeno de repartidores, para los reportes (HU de reportes,
+seccion 4.4 y 4.6).
+
+Atributos
+  pedido        FK a pedidos_pedido (CASCADE).
+  estado        El estado al que paso el pedido.
+  cambiado_por  FK a usuarios_user (SET_NULL). Quien hizo el cambio.
+  fecha_hora    Cuando ocurrio.
+  comentario    Nota opcional.
+Relaciones: N-1 con pedidos_pedido y N-1 con usuarios_user.
+Pendiente del codigo: crear una fila cada vez que cambia pedidos_pedido.estado,
+  en la MISMA transaccion que el cambio (la base no lo hace sola).
+
+
+================================================================================
+10. NOTIFICACIONES
+================================================================================
+
+--------------------------------------------------------------------------------
+notificaciones_notificacion         (PK: id UUID)
+--------------------------------------------------------------------------------
+Proposito: registro de los correos enviados (confirmacion, cambio de estado,
+cancelacion, repartidor asignado, pedido en camino) y de las alertas que se
+muestran en el panel (capacidad proxima a agotarse, stock bajo).
+
+Atributos
+  usuario       FK a usuarios_user (CASCADE). Destinatario. Puede quedar VACIO
+                para una alerta general de la sede.
+  sede          FK a sedes_sede (CASCADE), opcional. Sede a la que va la alerta.
+  pedido        FK a pedidos_pedido (CASCADE), opcional. Pedido que la origino.
+  tipo          pedido_confirmado, cambio_estado, pedido_cancelado,
+                repartidor_asignado, pedido_en_camino, alerta_capacidad o
+                alerta_stock_bajo.
+  canal         correo o sistema (alerta dentro del panel).
+  asunto        Asunto del correo (opcional).
+  mensaje       Contenido.
+  estado_envio  pendiente, enviado o fallido. Permite reintentar los fallidos.
+  intentos      Cuantas veces se intento enviar.
+  leida         Si el usuario ya vio la alerta del panel.
+  creado_en     Cuando se genero.
+  enviado_en    Cuando se envio con exito.
+Relaciones: N-1 opcionales con usuarios_user, sedes_sede y pedidos_pedido.
+Pendiente del codigo: la tarea asincrona (Celery) que toma las pendientes,
+  envia el correo y actualiza estado_envio e intentos.
+
+
+================================================================================
+11. RESUMEN DE POLITICAS DE BORRADO
+================================================================================
+
+Regla de oro: lo que tiene historia no se borra, se desactiva.
+
+  PROTECT (no deja borrar mientras tenga hijos)
+    sedes_sede, usuarios_user, menu_producto cuando hay pedidos que los usan.
+  CASCADE (el hijo desaparece con el padre)
+    Direcciones de un usuario; horarios, feriados, zonas, capacidad e inventario
+    de una sede; grupos y opciones de un producto; lineas, opciones e historial
+    de un pedido.
+  SET_NULL (el hijo sobrevive sin referencia)
+    categoria de un producto; direccion/zona/promocion de un pedido (por eso el
+    pedido guarda sus snapshots); opcion de una linea de pedido; autor de un
+    cambio de estado.
+
+Mecanismos de "desactivar" (en vez de borrar)
+  usuarios_user.is_active      usuarios_direccion.activa    sedes_sede.activa
+  menu_categoria.activa        menu_producto.disponible     menu_opcionproducto.activa
+  cobertura_zonacobertura.activa  cobertura_capacidadfranja.activa
+  promociones_promocion.activa
+
+
+================================================================================
+12. LO QUE LA BASE DE DATOS NO HACE (responsabilidad de los servicios)
+================================================================================
+
+La base garantiza reglas simples sobre una fila (valores validos, unicidad,
+coherencia del total). Las reglas que cruzan varias tablas o dependen del tiempo
+las debe garantizar el codigo, de preferencia dentro de transacciones
+(transaction.atomic):
+
+  1. Un operador solo gestiona los datos de las sedes que tiene asignadas.
+  2. Un pedido solo se acepta si la sede esta abierta (horario y feriados).
+  3. La direccion debe caer dentro de una zona activa de la sede y el pedido
+     debe alcanzar el minimo de esa zona.
+  4. La sede no debe superar su tope de pedidos simultaneos en la franja; si lo
+     supera, se sugiere otra sede o franja.
+  5. Hay existencias suficientes; el stock se descuenta al confirmar y se
+     devuelve al cancelar.
+  6. La promocion esta vigente, cumple el minimo y no excedio su cupo diario.
+  7. Los totales y el tiempo estimado se calculan en el servidor, nunca se
+     aceptan del cliente.
+  8. Cada cambio de estado deja una fila en pedidos_historialestado y puede
+     generar una notificacion.
+  9. Solo el cliente puede cancelar su pedido y solo antes de que inicie la
+     preparacion.
+ 10. Los roles se respetan: solo un usuario con rol repartidor puede ser
+     repartidor de un pedido; solo cocina y repartidor cambian ciertos estados.
+
+================================================================================
+FIN
+================================================================================
