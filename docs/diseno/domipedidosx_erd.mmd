@@ -1,0 +1,138 @@
+erDiagram
+    cobertura_capacidadfranja {
+        bigint id PK
+        uuid sede_id FK
+    }
+    cobertura_zonacobertura {
+        uuid id PK
+        uuid sede_id FK
+    }
+    core_configuracionglobal {
+        varchar clave PK
+    }
+    inventario_inventariosede {
+        uuid id PK
+        uuid producto_id FK
+        uuid sede_id FK
+    }
+    menu_categoria {
+        uuid id PK
+    }
+    menu_grupoopcion {
+        uuid id PK
+        uuid producto_id FK
+    }
+    menu_opcionproducto {
+        uuid id PK
+        uuid grupo_id FK
+    }
+    menu_producto {
+        uuid id PK
+        uuid categoria_id FK
+    }
+    menu_productocombo {
+        bigint id PK
+        uuid combo_id FK
+        uuid producto_id FK
+    }
+    notificaciones_notificacion {
+        uuid id PK
+        bigint pedido_id FK
+        uuid sede_id FK
+        uuid usuario_id FK
+    }
+    pedidos_detallepedido {
+        uuid id PK
+        uuid producto_id FK
+        bigint pedido_id FK
+    }
+    pedidos_detallepedidoopcion {
+        uuid id PK
+        uuid detalle_id FK
+        uuid opcion_id FK
+    }
+    pedidos_historialestado {
+        uuid id PK
+        uuid cambiado_por_id FK
+        bigint pedido_id FK
+    }
+    pedidos_pedido {
+        bigint id PK
+        uuid cliente_id FK
+        uuid creado_por_id FK
+        uuid direccion_id FK
+        uuid promocion_id FK
+        uuid repartidor_id FK
+        uuid sede_id FK
+        uuid zona_id FK
+    }
+    promociones_promocion {
+        uuid id PK
+        uuid sede_id FK
+    }
+    promociones_promocionproducto {
+        bigint id PK
+        uuid producto_id FK
+        uuid promocion_id FK
+    }
+    sedes_feriado {
+        bigint id PK
+        uuid sede_id FK
+    }
+    sedes_horarioatencion {
+        bigint id PK
+        uuid sede_id FK
+    }
+    sedes_sede {
+        uuid id PK
+    }
+    sedes_sedeusuario {
+        bigint id PK
+        uuid sede_id FK
+        uuid usuario_id FK
+    }
+    usuarios_direccion {
+        uuid id PK
+        uuid cliente_id FK
+    }
+    usuarios_perfilrepartidor {
+        uuid usuario_id PK, FK
+    }
+    usuarios_user {
+        uuid id PK
+    }
+
+    cobertura_zonacobertura |o--o{ pedidos_pedido : "zona_id"
+    menu_categoria |o--o{ menu_producto : "categoria_id"
+    menu_grupoopcion ||--o{ menu_opcionproducto : "grupo_id"
+    menu_opcionproducto |o--o{ pedidos_detallepedidoopcion : "opcion_id"
+    menu_producto ||--o{ inventario_inventariosede : "producto_id"
+    menu_producto ||--o{ menu_grupoopcion : "producto_id"
+    menu_producto ||--o{ menu_productocombo : "combo_id"
+    menu_producto ||--o{ menu_productocombo : "producto_id"
+    menu_producto ||--o{ pedidos_detallepedido : "producto_id"
+    menu_producto ||--o{ promociones_promocionproducto : "producto_id"
+    pedidos_detallepedido ||--o{ pedidos_detallepedidoopcion : "detalle_id"
+    pedidos_pedido |o--o{ notificaciones_notificacion : "pedido_id"
+    pedidos_pedido ||--o{ pedidos_detallepedido : "pedido_id"
+    pedidos_pedido ||--o{ pedidos_historialestado : "pedido_id"
+    promociones_promocion |o--o{ pedidos_pedido : "promocion_id"
+    promociones_promocion ||--o{ promociones_promocionproducto : "promocion_id"
+    sedes_sede ||--o{ cobertura_capacidadfranja : "sede_id"
+    sedes_sede ||--o{ cobertura_zonacobertura : "sede_id"
+    sedes_sede ||--o{ inventario_inventariosede : "sede_id"
+    sedes_sede |o--o{ notificaciones_notificacion : "sede_id"
+    sedes_sede ||--o{ pedidos_pedido : "sede_id"
+    sedes_sede |o--o{ promociones_promocion : "sede_id"
+    sedes_sede |o--o{ sedes_feriado : "sede_id"
+    sedes_sede ||--o{ sedes_horarioatencion : "sede_id"
+    sedes_sede ||--o{ sedes_sedeusuario : "sede_id"
+    usuarios_direccion |o--o{ pedidos_pedido : "direccion_id"
+    usuarios_user |o--o{ notificaciones_notificacion : "usuario_id"
+    usuarios_user |o--o{ pedidos_historialestado : "cambiado_por_id"
+    usuarios_user |o--o{ pedidos_pedido : "cliente_id"
+    usuarios_user |o--o{ pedidos_pedido : "creado_por_id"
+    usuarios_user |o--o{ pedidos_pedido : "repartidor_id"
+    usuarios_user ||--o{ sedes_sedeusuario : "usuario_id"
+    usuarios_user ||--o{ usuarios_direccion : "cliente_id"
+    usuarios_user ||--o| usuarios_perfilrepartidor : "usuario_id"
