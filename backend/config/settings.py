@@ -4,7 +4,7 @@ Django settings for config project (DomiPedidosX).
 Los valores que cambian entre entornos (clave secreta, DEBUG, base de datos)
 se leen del archivo backend/.env, que NO se sube a Git.
 """
-
+from datetime import timedelta 
 from pathlib import Path
 
 import environ
@@ -27,6 +27,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Terceros
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "corsheaders",
     # Apps del proyecto
     "apps.core",
     "apps.usuarios",
@@ -46,6 +50,7 @@ AUTH_USER_MODEL = "usuarios.User"
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -105,3 +110,19 @@ MAILERS = {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
     },
 }
+
+# --- API REST y JWT ----------------------------------------------------------
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),   # criterio 1
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
+# --- CORS --------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
