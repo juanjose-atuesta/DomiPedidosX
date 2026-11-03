@@ -66,3 +66,18 @@ class DesactivarUsuarioView(APIView):
         usuario.save()
         return Response({"mensaje": "Cuenta desactivada exitosamente"}, status=status.HTTP_200_OK)
     
+# HU 1.6: Cambiar rol de usuario
+class CambiarRolView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, pk):
+        usuario = get_object_or_404(User, pk=pk)
+        serializer = RolSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            usuario.rol = serializer.validated_data['rol']
+            usuario.save()
+            return Response({"mensaje": f"Rol actualizado a {usuario.rol}"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
