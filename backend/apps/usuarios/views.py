@@ -81,3 +81,24 @@ class CambiarRolView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# HU 1.9: Guardar direcciones con mapa
+class DireccionListCreateView(APIView):
+    permission_classes = [IsAuthenticated] # Requiere estar logueado (token JWT)
+
+    def get(self, request):
+        # Listar solo las direcciones activas del usuario logueado
+        direcciones = Direccion.objects.filter(cliente=request.user, activa=True)
+        serializer = DireccionSerializer(direcciones, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        # Validar máximo 5 direcciones (Criterio de aceptación de la HU)
+        if Direccion.objects.filter(cliente=request.user, activa=True).count() >= 5:
+            return Response({"error": "Máximo 5 direcciones permitidas"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        serializer = DireccionSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(cliente=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
