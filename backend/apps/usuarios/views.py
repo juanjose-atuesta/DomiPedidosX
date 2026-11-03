@@ -8,6 +8,14 @@ from rest_framework.views import APIView
 from .permissions import IsCocina, IsOperador, IsRepartidor
 from .serializers import LoginSerializer
 
+from rest_framework import status
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
+from .models import Direccion
+from .serializers import DireccionSerializer, RolSerializer
+
+User = get_user_model()
 
 class LoginView(TokenObtainPairView):
     """POST /api/auth/login/ — inicio de sesión único para todos los roles."""
@@ -47,3 +55,14 @@ class ModuloRepartidorView(APIView):
 
     def get(self, request):
         return Response({"modulo": "pedidos asignados"})
+
+# HU 1.10: Desactivar cuenta de cliente
+class DesactivarUsuarioView(APIView):
+    permission_classes = [IsAdminUser] # Solo el admin de Django (is_staff=True) puede entrar
+
+    def patch(self, request, pk):
+        usuario = get_object_or_404(User, pk=pk)
+        usuario.is_active = False
+        usuario.save()
+        return Response({"mensaje": "Cuenta desactivada exitosamente"}, status=status.HTTP_200_OK)
+    

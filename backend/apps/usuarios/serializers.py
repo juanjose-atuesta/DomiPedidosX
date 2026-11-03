@@ -45,3 +45,15 @@ class LoginSerializer(TokenObtainPairSerializer):
                 "rol": user.rol,
             },
         }
+
+from .models import Direccion, Rol
+
+class RolSerializer(serializers.Serializer):
+    # Para validar que el nuevo rol sea uno de los permitidos
+    rol = serializers.ChoiceField(choices=Rol.choices)
+
+class DireccionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Direccion
+        fields = ['id', 'alias', 'direccion_texto', 'detalles', 'latitud', 'longitud', 'es_principal']
+        
