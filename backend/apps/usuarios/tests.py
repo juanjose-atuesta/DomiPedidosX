@@ -1,9 +1,17 @@
+import re
+from uuid import uuid4
+
+from django.core import mail
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from .models import Rol, User
+from apps.sedes.models import Sede, SedeUsuario
+
+from .models import PerfilRepartidor, Rol, User
+from .serializers import LoginSerializer
 
 PASSWORD = "ClaveSegura#2024"
 
@@ -254,5 +262,387 @@ class MeTests(APITestCase):
         response = self.client.get(
             self.url, HTTP_AUTHORIZATION=f"Bearer {alterado}"
         )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class RegistroPersonalTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("registro_personal")
+        self.admin = User.objects.create_user(
+            email="admin@example.com",
+            password=PASSWORD,
+            nombre="Admin",
+            apellido="Principal",
+            telefono="3001111111",
+            rol=Rol.ADMIN,
+            is_staff=True,
+        )
+        self.sede1 = Sede.objects.create(
+            nombre="Sede Norte", direccion="Calle 1"
+        )
+        self.sede2 = Sede.objects.create(
+            nombre="Sede Sur", direccion="Calle 2"
+        )
+        self.sede_inactiva = Sede.objects.create(
+            nombre="Sede Cerrada", direccion="Calle 3", activa=False
+        )
+
+    def _token(self, usuario):
+        return str(LoginSerializer.get_token(usuario).access_token)
+
+    def _payload(self, **overrides):
+        data = {
+            "email": "personal@example.com",
+            "nombre": "Nuevo",
+            "apellido": "Personal",
+            "telefono": "3001234567",
+            "rol": Rol.OPERADOR,
+            "sedes_ids": [str(self.sede1.id)],
+            "password": PASSWORD,
+            "password_confirmacion": PASSWORD,
+        }
+        data.update(overrides)
+        return data
+
+    def _post(self, payload, token=None):
+        if token:
+            return self.client.post(
+                self.url,
+                payload,
+                format="json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+        return self.client.post(self.url, payload, format="json")
+
+    def test_admin_crea_personal_operativo_con_sedes(self):
+        token = self._token(self.admin)
+        casos = [
+            (Rol.OPERADOR, "operador@example.com"),
+            (Rol.COCINA, "cocina@example.com"),
+            (Rol.REPARTIDOR, "repartidor@example.com"),
+        ]
+
+        for rol, email in casos:
+            response = self._post(
+                self._payload(
+                    email=email,
+                    rol=rol,
+                    sedes_ids=[str(self.sede1.id), str(self.sede2.id)],
+                ),
+                token,
+            )
+
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            self.assertEqual(response.data["usuario"]["rol"], rol)
+            self.assertEqual(len(response.data["usuario"]["sedes"]), 2)
+
+            usuario = User.objects.get(email=email)
+            self.assertEqual(usuario.rol, rol)
+            self.assertEqual(
+                SedeUsuario.objects.filter(usuario=usuario).count(), 2
+            )
+
+    def test_repartidor_crea_su_perfil_automaticamente(self):
+        response = self._post(
+            self._payload(
+                rol=Rol.REPARTIDOR, email="repartidor.perfil@example.com"
+            ),
+            self._token(self.admin),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        usuario = User.objects.get(email="repartidor.perfil@example.com")
+        perfil = PerfilRepartidor.objects.get(usuario=usuario)
+        self.assertFalse(perfil.disponible)
+
+    def test_admin_crea_otro_admin_sin_sedes(self):
+        response = self._post(
+            self._payload(
+                rol=Rol.ADMIN, email="admin2@example.com", sedes_ids=[]
+            ),
+            self._token(self.admin),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["usuario"]["rol"], Rol.ADMIN)
+        self.assertEqual(response.data["usuario"]["sedes"], [])
+
+        usuario = User.objects.get(email="admin2@example.com")
+        self.assertTrue(usuario.is_staff)
+        self.assertFalse(
+            PerfilRepartidor.objects.filter(usuario=usuario).exists()
+        )
+
+    def test_personal_operativo_sin_sedes_da_400(self):
+        token = self._token(self.admin)
+
+        response_vacio = self._post(self._payload(sedes_ids=[]), token)
+        self.assertEqual(
+            response_vacio.status_code, status.HTTP_400_BAD_REQUEST
+        )
+        self.assertIn("sedes_ids", response_vacio.data)
+
+        payload_sin_campo = self._payload(email="sin.sede@example.com")
+        payload_sin_campo.pop("sedes_ids")
+        response_sin_campo = self._post(payload_sin_campo, token)
+        self.assertEqual(
+            response_sin_campo.status_code, status.HTTP_400_BAD_REQUEST
+        )
+        self.assertIn("sedes_ids", response_sin_campo.data)
+
+    def test_sede_inexistente_o_inactiva_da_400(self):
+        token = self._token(self.admin)
+
+        response_inexistente = self._post(
+            self._payload(sedes_ids=[str(uuid4())]), token
+        )
+        self.assertEqual(
+            response_inexistente.status_code, status.HTTP_400_BAD_REQUEST
+        )
+        self.assertIn("sedes_ids", response_inexistente.data)
+
+        response_inactiva = self._post(
+            self._payload(
+                email="sede.inactiva@example.com",
+                sedes_ids=[str(self.sede_inactiva.id)],
+            ),
+            token,
+        )
+        self.assertEqual(
+            response_inactiva.status_code, status.HTTP_400_BAD_REQUEST
+        )
+        self.assertIn("sedes_ids", response_inactiva.data)
+
+    def test_cliente_no_puede_usar_el_endpoint(self):
+        cliente = User.objects.create_user(
+            email="cliente.endpoint@example.com",
+            password=PASSWORD,
+            nombre="Cliente",
+            apellido="Prueba",
+            telefono="3002222222",
+        )
+
+        response = self._post(self._payload(), self._token(cliente))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_sin_token_da_401(self):
+        response = self._post(self._payload())
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_no_permite_crear_clientes(self):
+        response = self._post(
+            self._payload(rol=Rol.CLIENTE), self._token(self.admin)
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("rol", response.data)
+
+    def test_email_duplicado_sin_distinguir_mayusculas(self):
+        User.objects.create_user(
+            email="personal.dup@example.com",
+            password=PASSWORD,
+            nombre="Existente",
+            apellido="Prueba",
+            telefono="3003333333",
+            rol=Rol.COCINA,
+        )
+
+        response = self._post(
+            self._payload(email="PERSONAL.DUP@EXAMPLE.COM"),
+            self._token(self.admin),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+
+
+class PasswordResetTests(APITestCase):
+    def setUp(self):
+        self.solicitar_url = reverse("solicitar_password_reset")
+        self.confirmar_url = reverse("confirmar_password_reset")
+        self.usuario = User.objects.create_user(
+            email="cliente@example.com",
+            password=PASSWORD,
+            nombre="Juan",
+            apellido="Perez",
+            telefono="3001234567",
+        )
+        mail.outbox.clear()
+
+    def _solicitar(self, email="cliente@example.com"):
+        return self.client.post(
+            self.solicitar_url, {"email": email}, format="json"
+        )
+
+    def _extraer_credenciales(self, cuerpo):
+        uidb64 = re.search(r"uid: (\S+)", cuerpo).group(1)
+        token = re.search(r"token: (\S+)", cuerpo).group(1)
+        return uidb64, token
+
+    def _confirmar(self, uidb64, token, new_password):
+        return self.client.post(
+            self.confirmar_url,
+            {
+                "uidb64": uidb64,
+                "token": token,
+                "new_password": new_password,
+            },
+            format="json",
+        )
+
+    def test_solicitud_con_correo_existente_envia_email(self):
+        response = self._solicitar("CLIENTE@EXAMPLE.COM")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["cliente@example.com"])
+        self.assertIn("uid:", mail.outbox[0].body)
+        self.assertIn("token:", mail.outbox[0].body)
+
+    def test_solicitud_con_correo_inexistente_no_revela_ni_envia(self):
+        respuesta_existente = self._solicitar()
+        respuesta_inexistente = self._solicitar("nadie@example.com")
+
+        self.assertEqual(
+            respuesta_existente.status_code, status.HTTP_200_OK
+        )
+        self.assertEqual(
+            respuesta_inexistente.status_code, status.HTTP_200_OK
+        )
+        self.assertEqual(
+            respuesta_existente.data["mensaje"],
+            respuesta_inexistente.data["mensaje"],
+        )
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_confirmacion_exitosa_cambia_la_contrasena(self):
+        self._solicitar()
+        uidb64, token = self._extraer_credenciales(mail.outbox[0].body)
+        nueva_password = "NuevaClave#2026"
+
+        response = self._confirmar(uidb64, token, nueva_password)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertTrue(self.usuario.check_password(nueva_password))
+        self.assertFalse(self.usuario.check_password(PASSWORD))
+
+    def test_confirmacion_con_token_alterado_da_400(self):
+        self._solicitar()
+        uidb64, token = self._extraer_credenciales(mail.outbox[0].body)
+        alterado = token[:-1] + ("a" if token[-1] != "a" else "b")
+
+        response = self._confirmar(uidb64, alterado, "NuevaClave#2026")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.usuario.refresh_from_db()
+        self.assertTrue(self.usuario.check_password(PASSWORD))
+
+    @override_settings(PASSWORD_RESET_TIMEOUT=-1)
+    def test_confirmacion_con_token_expirado_da_400(self):
+        self._solicitar()
+        uidb64, token = self._extraer_credenciales(mail.outbox[0].body)
+
+        response = self._confirmar(uidb64, token, "NuevaClave#2026")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_confirmacion_con_contrasena_debil_da_400(self):
+        self._solicitar()
+        uidb64, token = self._extraer_credenciales(mail.outbox[0].body)
+
+        response = self._confirmar(uidb64, token, "12345678")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.usuario.refresh_from_db()
+        self.assertTrue(self.usuario.check_password(PASSWORD))
+
+    def test_confirmacion_con_uid_invalido_da_400(self):
+        response = self._confirmar(
+            "uid-invalido", "token-invalido", "NuevaClave#2026"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class ActualizarPerfilTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("usuario_me")
+        self.usuario = User.objects.create_user(
+            email="cliente@example.com",
+            password=PASSWORD,
+            nombre="Juan",
+            apellido="Perez",
+            telefono="3001234567",
+        )
+        self.token = str(
+            LoginSerializer.get_token(self.usuario).access_token
+        )
+
+    def _patch(self, payload, token=None):
+        if token:
+            return self.client.patch(
+                self.url,
+                payload,
+                format="json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+        return self.client.patch(self.url, payload, format="json")
+
+    def test_patch_actualiza_nombre_apellido_y_telefono(self):
+        response = self._patch(
+            {
+                "nombre": "Ana",
+                "apellido": "Gomez",
+                "telefono": "3119999999",
+            },
+            self.token,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.nombre, "Ana")
+        self.assertEqual(self.usuario.apellido, "Gomez")
+        self.assertEqual(self.usuario.telefono, "3119999999")
+        self.assertEqual(response.data["nombre"], "Ana")
+
+    def test_patch_parcial_solo_actualiza_el_campo_enviado(self):
+        response = self._patch(
+            {"telefono": "3228888888"}, self.token
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.telefono, "3228888888")
+        self.assertEqual(self.usuario.nombre, "Juan")
+        self.assertEqual(self.usuario.apellido, "Perez")
+
+    def test_patch_ignora_email_rol_e_is_staff(self):
+        email_original = self.usuario.email
+
+        response = self._patch(
+            {
+                "nombre": "Nuevo",
+                "email": "otro@example.com",
+                "rol": Rol.ADMIN,
+                "is_staff": True,
+            },
+            self.token,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.nombre, "Nuevo")
+        self.assertEqual(self.usuario.email, email_original)
+        self.assertEqual(self.usuario.rol, Rol.CLIENTE)
+        self.assertFalse(self.usuario.is_staff)
+
+    def test_patch_sin_token_da_401(self):
+        response = self._patch({"telefono": "3000000000"})
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

@@ -90,10 +90,7 @@ class PermisosPorRolTests(APITestCase):
         return self.client.get(url)
 
     def test_matriz_de_acceso_por_rol(self):
-        usuarios = {
-            rol: self._crear_usuario(rol)
-            for rol, _ in VISTAS_POR_ROL
-        }
+        usuarios = {rol: self._crear_usuario(rol) for rol, _ in VISTAS_POR_ROL}
 
         for rol_vista, url in VISTAS_POR_ROL:
             for rol_visitante, usuario in usuarios.items():
@@ -140,20 +137,14 @@ class PermisosPorRolTests(APITestCase):
         denegados = [Rol.CLIENTE, Rol.REPARTIDOR, Rol.ADMIN]
 
         for rol in permitidos:
-            usuario = self._crear_usuario(
-                rol, email=f"combo-{rol}@example.com"
-            )
+            usuario = self._crear_usuario(rol, email=f"combo-{rol}@example.com")
             response = self._get("/test/cocina-operador/", self._token(usuario))
             self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         for rol in denegados:
-            usuario = self._crear_usuario(
-                rol, email=f"combo-{rol}@example.com"
-            )
+            usuario = self._crear_usuario(rol, email=f"combo-{rol}@example.com")
             response = self._get("/test/cocina-operador/", self._token(usuario))
-            self.assertEqual(
-                response.status_code, status.HTTP_403_FORBIDDEN
-            )
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_cambio_de_rol_en_bd_aplica_aunque_el_token_siga_anterior(self):
         usuario = self._crear_usuario(Rol.CLIENTE, email="cambia@example.com")

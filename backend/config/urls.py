@@ -24,4 +24,6 @@ urlpatterns = [
     path("api/auth/", include("apps.usuarios.auth_urls")),
     # Incluye las urls de la app usuarios bajo el prefijo api/usuarios/
     path("api/usuarios/", include("apps.usuarios.urls")),
+    # Gestión de sedes y sus horarios de atención
+    path("api/sedes/", include("apps.sedes.urls")),
 ]
