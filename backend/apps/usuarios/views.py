@@ -1,12 +1,12 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permission
+from rest_framework import status, permissions
 from .serializers import RegistroClienteSerializer
 from .services import registrar_cliente
 
 
 class RegistroClienteView(APIView):
-    permission_classes = [permission.AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = RegistroClienteSerializer(data=request.data)
