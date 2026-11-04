@@ -5,6 +5,7 @@ Los valores que cambian entre entornos (clave secreta, DEBUG, base de datos)
 se leen del archivo backend/.env, que NO se sube a Git.
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -43,6 +44,28 @@ INSTALLED_APPS = [
 
 # Modelo de usuario propio: debe definirse ANTES de la primera migración
 AUTH_USER_MODEL = "usuarios.User"
+
+# --- Django REST Framework ---------------------------------------------------
+# Por defecto toda la API exige autenticación; los endpoints públicos declaran
+# AllowAny explícitamente.
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
+}
+
+# --- JWT ---------------------------------------------------------------------
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    # El usuario usa UUID como PK; simplejwt lo convierte a str en el claim.
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

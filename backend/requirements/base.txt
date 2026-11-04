@@ -1,6 +1,6 @@
 Django>=5.0
 djangorestframework
-djangorestframework-simplejwt
+djangorestframework-simplejwt==5.5.1
 django-cors-headers
 django-environ
 psycopg[binary]
