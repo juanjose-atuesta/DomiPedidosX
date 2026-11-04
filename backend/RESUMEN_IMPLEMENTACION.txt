@@ -54,14 +54,96 @@ HU 3 - Permisos por rol
 - Admin no tiene acceso implicito.
 - Combinables con el operador | de DRF.
 
+HU 4 - Registro de personal operativo y administradores (por admin)
+- POST /api/usuarios/personal/
+- Solo un usuario con rol admin puede usarlo (EsAdmin).
+- Roles permitidos: operador, cocina, repartidor y admin.
+- Operador, cocina y repartidor requieren al menos una sede activa; se crean
+  los registros en SedeUsuario.
+- Un admin adicional se crea con is_staff=True.
+- Si el rol es repartidor se crea automaticamente PerfilRepartidor con
+  disponible=False.
+- Responde 201 con los datos del usuario, su rol y las sedes vinculadas.
+- Errores: 400 por datos/sedes invalidas, 403 si no es admin, 401 sin token.
+
+Cambios realizados en la HU 4:
+- services.py: constantes ROLES_PERSONAL y ROLES_OPERATIVOS, y funcion
+  crear_usuario_personal(...) con transaction.atomic(), validacion de rol,
+  verificacion de sedes activas, creacion de SedeUsuario y de PerfilRepartidor.
+- serializers.py: RegistroPersonalSerializer (email unico iexact, contrasena
+  validada + confirmacion, rol permitido y sedes_ids obligatorio para roles
+  operativos) y PersonalSerializer (respuesta con sedes).
+- views.py: RegistroPersonalView con permission_classes = [EsAdmin].
+- urls.py: ruta path("personal/", RegistroPersonalView.as_view(),
+  name="registro_personal").
+- tests.py: 9 pruebas APITestCase de registro de personal.
+
+HU 5 - Recuperacion de contrasena desde el correo registrado
+- POST /api/usuarios/password-reset/           (AllowAny)
+- POST /api/usuarios/password-reset/confirmar/ (AllowAny)
+- La solicitud busca el email con iexact. Si existe, genera uidb64 + token
+  con default_token_generator y envia un correo con ambos datos.
+- Si el correo no existe no lanza error y responde el mismo mensaje, para no
+  revelar que usuarios estan registrados.
+- La confirmacion decodifica el UID, valida el token, valida la nueva
+  contrasena con los validadores de Django y la guarda con set_password.
+- Token invalido/expirado o contrasena debil: 400 con mensaje en espanol.
+
+HU 6 - Edicion del perfil del cliente
+- PATCH /api/usuarios/me/ con IsAuthenticated.
+- Solo permite modificar nombre, apellido y telefono.
+- Si el cliente envia email, rol o is_staff, esos campos se ignoran.
+- Sin token: 401.
+
+HU 7 - Gestion de sedes (CRUD para administradores)
+- POST   /api/sedes/            -> crear sede con horarios (EsAdmin).
+- GET    /api/sedes/            -> listar sedes (AllowAny).
+- GET    /api/sedes/<uuid>/     -> detalle de sede (AllowAny).
+- PUT    /api/sedes/<uuid>/     -> reemplazar datos de sede (EsAdmin).
+- PATCH  /api/sedes/<uuid>/     -> editar datos de sede (EsAdmin).
+- DELETE /api/sedes/<uuid>/     -> desactivacion logica (EsAdmin).
+- El publico y los usuarios no admin solo ven sedes activa=True.
+- Un admin autenticado puede listar las inactivas con
+  ?incluir_inactivas=true y consultar su detalle.
+- DELETE no borra fisicamente: marca activa=False y responde 200 con mensaje.
+- Validaciones: dia_semana entre 1 y 7, hora_cierre > hora_apertura y sin
+  traslapes de horarios el mismo dia.
+- Errores: 400 por datos/horarios invalidos, 401 sin token, 403 si no es admin.
+
+Cambios realizados en las HU 5 y 6:
+- services.py: solicitar_recuperacion_password, confirmar_recuperacion_password
+  y actualizar_perfil_usuario.
+- serializers.py: SolicitarPasswordResetSerializer,
+  ConfirmarPasswordResetSerializer y ActualizarPerfilSerializer.
+- views.py: SolicitarPasswordResetView, ConfirmarPasswordResetView y metodo
+  patch agregado a MeView.
+- urls.py: rutas password-reset/ y password-reset/confirmar/.
+- tests.py: 7 pruebas de recuperacion de contrasena y 4 de edicion de perfil.
+
+Cambios realizados en el modulo de sedes (HU 7):
+- services.py: validar_horarios, crear_sede, actualizar_sede y
+  desactivar_sede, con transacciones atomicas y borrado logico.
+- serializers.py: HorarioAtencionSerializer y SedeSerializer con horarios
+  anidados de lectura/escritura y activa de solo lectura.
+- views.py: SedeListCreateView y SedeDetailView con permisos por metodo
+  (EsAdmin para escritura, AllowAny para consulta).
+- urls.py: rutas de lista/creacion y detalle por UUID.
+- config/urls.py: montaje de api/sedes/.
+- tests.py: 15 pruebas APITestCase (16 subtests) del modulo de sedes.
+
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    21 passed
+    56 passed, 16 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).
 
-Las 21 pruebas incluyen 15 de HU 1/HU 2 y 6 de permisos por rol.
+    .venv/bin/python manage.py makemigrations --check --dry-run
+    No changes detected
+
+Las 56 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
+HU 4 (registro de personal), 7 de la HU 5 (recuperacion de contrasena),
+4 de la HU 6 (edicion de perfil) y 15 de la HU 7 (gestion de sedes).
 
 
 ==============================================================================
@@ -1087,6 +1169,624 @@ class ReportesView(APIView):
 
     def get(self, request):
         return Response({"ok": True})
+
+==============================================================================
+DETALLE ADICIONAL DE LA HU 4 (REGISTRO DE PERSONAL)
+==============================================================================
+
+Nota: los bloques de codigo de ARCHIVO 4 a ARCHIVO 8 corresponden a la
+version previa a la HU 4. Los agregados de esta HU son los siguientes.
+
+services.py
+-------------------------------------------------------------------------------
+ROLES_PERSONAL = (Rol.OPERADOR, Rol.COCINA, Rol.REPARTIDOR, Rol.ADMIN)
+ROLES_OPERATIVOS = (Rol.OPERADOR, Rol.COCINA, Rol.REPARTIDOR)
+
+
+def crear_usuario_personal(
+    *,
+    email: str,
+    password: str,
+    nombre: str,
+    apellido: str,
+    telefono: str,
+    rol: str,
+    sedes_ids=None,
+) -> User:
+    with transaction.atomic():
+        if rol not in ROLES_PERSONAL:
+            raise ValueError(
+                "El rol indicado no es válido para registrar personal."
+            )
+
+        sedes_ids = list(sedes_ids or [])
+        if rol in ROLES_OPERATIVOS and not sedes_ids:
+            raise ValueError(
+                "Debes asignar al menos una sede para este rol."
+            )
+
+        sedes = list(Sede.objects.filter(id__in=sedes_ids, activa=True))
+        ids_unicos = {str(sede_id) for sede_id in sedes_ids}
+        if sedes_ids and len(sedes) != len(ids_unicos):
+            raise ValueError("Una o más sedes no existen o están inactivas.")
+
+        usuario = User.objects.create_user(
+            email=email,
+            password=password,
+            nombre=nombre,
+            apellido=apellido,
+            telefono=telefono,
+            rol=rol,
+            is_staff=(rol == Rol.ADMIN),
+        )
+
+        SedeUsuario.objects.bulk_create(
+            [SedeUsuario(usuario=usuario, sede=sede) for sede in sedes]
+        )
+
+        if rol == Rol.REPARTIDOR:
+            PerfilRepartidor.objects.create(usuario=usuario, disponible=False)
+
+        return usuario
+-------------------------------------------------------------------------------
+
+serializers.py
+-------------------------------------------------------------------------------
+class RegistroPersonalSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=8)
+    password_confirmacion = serializers.CharField(write_only=True)
+    rol = serializers.ChoiceField(choices=ROLES_PERSONAL)
+    sedes_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
+        write_only=True,
+    )
+
+    class Meta:
+        model = User
+        fields = (
+            "email",
+            "nombre",
+            "apellido",
+            "telefono",
+            "rol",
+            "sedes_ids",
+            "password",
+            "password_confirmacion",
+        )
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError(
+                "Ya existe un usuario registrado con este correo."
+            )
+        return email
+
+    def validate(self, data):
+        password = data.get("password")
+        if password != data.pop("password_confirmacion", None):
+            raise serializers.ValidationError(
+                {"password": "Las contraseñas no coinciden"}
+            )
+
+        usuario = User(
+            email=data.get("email", ""),
+            nombre=data.get("nombre", ""),
+            apellido=data.get("apellido", ""),
+            telefono=data.get("telefono", ""),
+            rol=data.get("rol", ""),
+        )
+        try:
+            password_validation.validate_password(password, usuario)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
+
+        sedes_ids = list(dict.fromkeys(data.get("sedes_ids", [])))
+        if data.get("rol") in ROLES_OPERATIVOS and not sedes_ids:
+            raise serializers.ValidationError(
+                {"sedes_ids": "Debes asignar al menos una sede para este rol."}
+            )
+        if sedes_ids:
+            sedes_activas = Sede.objects.filter(
+                id__in=sedes_ids, activa=True
+            ).count()
+            if sedes_activas != len(sedes_ids):
+                raise serializers.ValidationError(
+                    {
+                        "sedes_ids": (
+                            "Una o más sedes no existen o están inactivas."
+                        )
+                    }
+                )
+
+        data["sedes_ids"] = sedes_ids
+        return data
+
+
+class PersonalSerializer(serializers.ModelSerializer):
+    sedes = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "nombre",
+            "apellido",
+            "email",
+            "telefono",
+            "rol",
+            "sedes",
+        )
+        read_only_fields = fields
+
+    def get_sedes(self, obj):
+        return [
+            {
+                "id": str(sede_usuario.sede_id),
+                "nombre": sede_usuario.sede.nombre,
+            }
+            for sede_usuario in obj.sedes_asignadas.select_related("sede").all()
+        ]
+-------------------------------------------------------------------------------
+
+views.py
+-------------------------------------------------------------------------------
+class RegistroPersonalView(APIView):
+    permission_classes = [EsAdmin]
+
+    def post(self, request):
+        serializer = RegistroPersonalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        datos = serializer.validated_data
+        sedes_ids = datos.pop("sedes_ids", [])
+        usuario = crear_usuario_personal(**datos, sedes_ids=sedes_ids)
+
+        return Response(
+            {
+                "mensaje": "Usuario de personal registrado exitosamente",
+                "usuario": PersonalSerializer(usuario).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+-------------------------------------------------------------------------------
+
+urls.py
+-------------------------------------------------------------------------------
+path("personal/", RegistroPersonalView.as_view(), name="registro_personal"),
+-------------------------------------------------------------------------------
+
+tests.py
+-------------------------------------------------------------------------------
+9 pruebas en RegistroPersonalTests:
+- admin crea operador/cocina/repartidor con sedes (201)
+- repartidor crea PerfilRepartidor automaticamente
+- admin crea otro admin sin sedes
+- personal operativo sin sedes (400)
+- sede inexistente o inactiva (400)
+- cliente no admin (403)
+- sin token (401)
+- no permite crear clientes (400)
+- email duplicado sin distinguir mayusculas (400)
+-------------------------------------------------------------------------------
+
+==============================================================================
+DETALLE ADICIONAL DE LAS HU 5 Y 6
+==============================================================================
+
+Nota: los bloques de codigo de ARCHIVO 4 a ARCHIVO 8 corresponden a versiones
+previas. Los agregados de recuperacion de contrasena y edicion de perfil son
+los siguientes.
+
+services.py
+-------------------------------------------------------------------------------
+from django.contrib.auth import password_validation
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.mail import send_mail
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+
+
+def solicitar_recuperacion_password(*, email: str) -> None:
+    """Genera un token de reset y lo envia por correo si el usuario existe.
+
+    Si el correo no esta registrado no se lanza ninguna excepcion, para no
+    revelar que correos estan dados de alta.
+    """
+    email = email.strip().lower()
+    usuario = User.objects.filter(email__iexact=email).first()
+    if usuario is None:
+        return
+
+    uidb64 = urlsafe_base64_encode(force_bytes(usuario.pk))
+    token = default_token_generator.make_token(usuario)
+
+    asunto = "Recuperación de contraseña - DomiPedidosX"
+    mensaje = (
+        "Recibimos una solicitud para restablecer tu contraseña.\n\n"
+        f"uid: {uidb64}\n"
+        f"token: {token}\n\n"
+        "Si no solicitaste este cambio, ignora este correo."
+    )
+    send_mail(asunto, mensaje, None, [usuario.email], fail_silently=False)
+
+
+def confirmar_recuperacion_password(*, uidb64, token, new_password) -> User:
+    """Valida el token de recuperacion y actualiza la contrasena del usuario."""
+    try:
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        usuario = User.objects.get(pk=uid)
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeDecodeError,
+        DjangoValidationError,
+        User.DoesNotExist,
+    ):
+        raise ValueError("El enlace de recuperación es inválido o expiró.")
+
+    if not default_token_generator.check_token(usuario, token):
+        raise ValueError("El enlace de recuperación es inválido o expiró.")
+
+    password_validation.validate_password(new_password, usuario)
+
+    usuario.set_password(new_password)
+    usuario.save(update_fields=["password"])
+    return usuario
+
+
+def actualizar_perfil_usuario(
+    usuario, *, nombre=None, apellido=None, telefono=None
+) -> User:
+    """Actualiza unicamente los campos permitidos del perfil del usuario."""
+    campos_actualizados = []
+
+    if nombre is not None:
+        usuario.nombre = nombre
+        campos_actualizados.append("nombre")
+    if apellido is not None:
+        usuario.apellido = apellido
+        campos_actualizados.append("apellido")
+    if telefono is not None:
+        usuario.telefono = telefono
+        campos_actualizados.append("telefono")
+
+    if campos_actualizados:
+        usuario.save(update_fields=campos_actualizados)
+
+    return usuario
+-------------------------------------------------------------------------------
+
+serializers.py
+-------------------------------------------------------------------------------
+class SolicitarPasswordResetSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+
+class ConfirmarPasswordResetSerializer(serializers.Serializer):
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, min_length=8)
+
+
+class ActualizarPerfilSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("nombre", "apellido", "telefono")
+-------------------------------------------------------------------------------
+
+views.py
+-------------------------------------------------------------------------------
+class MeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        serializer = UsuarioSerializer(request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        serializer = ActualizarPerfilSerializer(
+            request.user, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+
+        usuario = actualizar_perfil_usuario(
+            request.user, **serializer.validated_data
+        )
+        return Response(
+            UsuarioSerializer(usuario).data, status=status.HTTP_200_OK
+        )
+
+
+class SolicitarPasswordResetView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = SolicitarPasswordResetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        solicitar_recuperacion_password(**serializer.validated_data)
+
+        return Response(
+            {
+                "mensaje": (
+                    "Si el correo está registrado, recibirás instrucciones "
+                    "para restablecer tu contraseña."
+                )
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ConfirmarPasswordResetView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ConfirmarPasswordResetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            confirmar_recuperacion_password(**serializer.validated_data)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        except DjangoValidationError as exc:
+            return Response(
+                {"new_password": list(exc.messages)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {"mensaje": "Contraseña actualizada correctamente."},
+            status=status.HTTP_200_OK,
+        )
+-------------------------------------------------------------------------------
+
+urls.py
+-------------------------------------------------------------------------------
+path(
+    "password-reset/",
+    SolicitarPasswordResetView.as_view(),
+    name="solicitar_password_reset",
+),
+path(
+    "password-reset/confirmar/",
+    ConfirmarPasswordResetView.as_view(),
+    name="confirmar_password_reset",
+),
+-------------------------------------------------------------------------------
+
+tests.py
+-------------------------------------------------------------------------------
+PasswordResetTests (7 pruebas):
+- solicitud con correo existente envia un email (uid + token)
+- solicitud con correo inexistente responde igual y no envia email
+- confirmacion exitosa cambia la contrasena
+- token alterado devuelve 400
+- token expirado devuelve 400
+- contrasena debil devuelve 400
+- uid invalido devuelve 400
+
+ActualizarPerfilTests (4 pruebas):
+- PATCH actualiza nombre, apellido y telefono
+- PATCH parcial solo actualiza el campo enviado
+- PATCH ignora email, rol e is_staff
+- PATCH sin token devuelve 401
+-------------------------------------------------------------------------------
+
+==============================================================================
+MODULO DE SEDES (HU 7)
+==============================================================================
+
+ARCHIVO: apps/sedes/services.py
+==============================================================================
+
+Finalidad:
+Concentrar la logica de creacion, actualizacion y desactivacion de sedes,
+validando los horarios antes de escribir en la base de datos.
+
+-------------------------------------------------------------------------------
+def validar_horarios(horarios):
+    """Valida coherencia y traslapes de una lista de horarios (dicts)."""
+    if not horarios:
+        return
+
+    tramos_por_dia = {}
+    for horario in horarios:
+        dia = horario.get("dia_semana")
+        apertura = horario.get("hora_apertura")
+        cierre = horario.get("hora_cierre")
+
+        if dia is None or not 1 <= int(dia) <= 7:
+            raise ValueError("El día de la semana debe estar entre 1 y 7.")
+        if apertura is None or cierre is None:
+            raise ValueError(
+                "Cada horario debe tener hora de apertura y de cierre."
+            )
+        if cierre <= apertura:
+            raise ValueError(
+                "La hora de cierre debe ser mayor que la hora de apertura."
+            )
+
+        tramos_por_dia.setdefault(int(dia), []).append((apertura, cierre))
+
+    for tramos in tramos_por_dia.values():
+        tramos.sort(key=lambda tramo: tramo[0])
+        for anterior, siguiente in zip(tramos, tramos[1:]):
+            if siguiente[0] < anterior[1]:
+                raise ValueError(
+                    "Los horarios de un mismo día no pueden traslaparse."
+                )
+
+
+def crear_sede(*, nombre, direccion, telefono=None, latitud=None,
+               longitud=None, horarios=None):
+    horarios = horarios or []
+    validar_horarios(horarios)
+
+    with transaction.atomic():
+        sede = Sede.objects.create(
+            nombre=nombre,
+            direccion=direccion,
+            telefono=telefono or "",
+            latitud=latitud,
+            longitud=longitud,
+        )
+        HorarioAtencion.objects.bulk_create(
+            [HorarioAtencion(sede=sede, **horario) for horario in horarios]
+        )
+        return sede
+
+
+def actualizar_sede(sede, *, datos_sede, horarios=None):
+    with transaction.atomic():
+        campos_actualizados = {}
+
+        for campo in ("nombre", "direccion", "telefono", "latitud", "longitud"):
+            if campo not in datos_sede:
+                continue
+            valor = datos_sede[campo]
+            if campo == "telefono" and valor is None:
+                valor = ""
+            setattr(sede, campo, valor)
+            campos_actualizados[campo] = valor
+
+        if campos_actualizados:
+            sede.save(update_fields=list(campos_actualizados))
+
+        if horarios is not None:
+            validar_horarios(horarios)
+            sede.horarios.all().delete()
+            HorarioAtencion.objects.bulk_create(
+                [HorarioAtencion(sede=sede, **horario) for horario in horarios]
+            )
+
+        return sede
+
+
+def desactivar_sede(sede):
+    """Aplica borrado logico: la sede deja de estar activa, no se elimina."""
+    with transaction.atomic():
+        sede.activa = False
+        sede.save(update_fields=["activa"])
+        return sede
+-------------------------------------------------------------------------------
+
+ARCHIVO: apps/sedes/serializers.py
+==============================================================================
+
+Finalidad:
+Validar y serializar la sede junto con sus horarios anidados.
+
+-------------------------------------------------------------------------------
+class HorarioAtencionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HorarioAtencion
+        fields = ("dia_semana", "hora_apertura", "hora_cierre")
+
+    def validate(self, data):
+        apertura = data.get("hora_apertura")
+        cierre = data.get("hora_cierre")
+
+        if apertura is not None and cierre is not None and cierre <= apertura:
+            raise serializers.ValidationError(
+                {"hora_cierre": (
+                    "La hora de cierre debe ser mayor que la hora de apertura."
+                )}
+            )
+        return data
+
+
+class SedeSerializer(serializers.ModelSerializer):
+    horarios = HorarioAtencionSerializer(many=True, required=False)
+
+    class Meta:
+        model = Sede
+        fields = (
+            "id", "nombre", "direccion", "telefono", "latitud",
+            "longitud", "activa", "horarios",
+        )
+        read_only_fields = ("id", "activa")
+
+    def validate_horarios(self, value):
+        try:
+            validar_horarios(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
+        return value
+-------------------------------------------------------------------------------
+
+ARCHIVO: apps/sedes/views.py
+==============================================================================
+
+Finalidad:
+Exponer el CRUD de sedes. La escritura queda reservada a EsAdmin y la
+consulta es publica, mostrando solo sedes activas salvo que un admin pida
+incluir las inactivas.
+
+Vistas:
+- SedeListCreateView
+  * GET  /api/sedes/       -> AllowAny; filtra activa=True.
+  * POST /api/sedes/       -> EsAdmin; crea sede + horarios.
+- SedeDetailView
+  * GET    /api/sedes/<uuid>/ -> AllowAny; sede inactiva solo para admin.
+  * PUT    /api/sedes/<uuid>/ -> EsAdmin.
+  * PATCH  /api/sedes/<uuid>/ -> EsAdmin.
+  * DELETE /api/sedes/<uuid>/ -> EsAdmin; activa=False y respuesta 200.
+
+Parametro opcional:
+- incluir_inactivas=true (solo surte efecto para un admin autenticado).
+
+Respuestas representativas:
+- 201 al crear, 200 al consultar/editar/desactivar.
+- 400 con mensaje en espanol ante horarios invalidos o traslapados.
+- 401 sin token valido en escritura.
+- 403 para roles distintos de admin en escritura.
+- 404 si la sede no existe o esta inactiva y el solicitante no es admin.
+-------------------------------------------------------------------------------
+
+ARCHIVO: apps/sedes/urls.py
+==============================================================================
+
+-------------------------------------------------------------------------------
+path("", SedeListCreateView.as_view(), name="sede_list_create"),
+path("<uuid:pk>/", SedeDetailView.as_view(), name="sede_detail"),
+-------------------------------------------------------------------------------
+
+ARCHIVO: config/urls.py
+==============================================================================
+
+-------------------------------------------------------------------------------
+path("api/sedes/", include("apps.sedes.urls")),
+-------------------------------------------------------------------------------
+
+ARCHIVO: apps/sedes/tests.py
+==============================================================================
+
+SedeGestionTests (15 pruebas, 16 subtests):
+- admin crea sede con horarios validos (201)
+- rechaza hora_cierre menor o igual a hora_apertura (400)
+- rechaza dia_semana fuera de rango 1-7 (400)
+- rechaza horarios traslapados en el mismo dia (400)
+- consulta publica solo muestra sedes activas
+- admin puede listar inactivas con incluir_inactivas=true
+- cliente no puede incluir inactivas ni con el parametro
+- detalle publico de sede activa (200)
+- detalle de sede inactiva solo visible para admin (404/200)
+- admin edita sede y reemplaza horarios (200)
+- editar sin horarios conserva los actuales
+- editar con horarios traslapados no modifica nada (400)
+- DELETE desactiva sin borrar el registro (activa=False)
+- cliente y repartidor reciben 403 en POST/PUT/PATCH/DELETE
+- sin token en escritura se recibe 401
 
 ==============================================================================
 FIN DEL RESUMEN
