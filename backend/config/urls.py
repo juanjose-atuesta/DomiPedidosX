@@ -20,6 +20,8 @@ from django.urls import path, include
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # Autenticación JWT (login y refresh)
+    path("api/auth/", include("apps.usuarios.auth_urls")),
     # Incluye las urls de la app usuarios bajo el prefijo api/usuarios/
     path("api/usuarios/", include("apps.usuarios.urls")),
 ]
