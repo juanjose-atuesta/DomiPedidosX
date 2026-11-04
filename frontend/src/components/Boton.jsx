@@ -21,7 +21,7 @@ export default function Boton({
   return (
     <button
       type="button"
-      className={`inline-flex h-11 items-center justify-center rounded-lg px-6 text-base font-semibold transition-colors disabled:cursor-not-allowed ${ESTILOS[tipo]} ${anchoCompleto ? "w-full" : ""} ${className}`}
+      className={`inline-flex shrink-0 whitespace-nowrap h-11 items-center justify-center rounded-lg px-6 text-base font-semibold transition-colors disabled:cursor-not-allowed ${ESTILOS[tipo]} ${anchoCompleto ? "w-full" : ""} ${className}`}
       {...props}
     >
       {children}
