@@ -1,11 +1,19 @@
+import { Navigate, Route, Routes } from "react-router-dom"
+import Usuarios from "./pages/admin/Usuarios"
+import CrearCuentaPersonal from "./pages/admin/CrearCuentaPersonal"
+import Sedes from "./pages/admin/Sedes"
+import FormularioSede from "./pages/admin/FormularioSede"
+
 export default function App() {
   return (
-    <div className="p-8">
-      <h1 className="font-titulo text-4xl font-bold text-texto">DomiPedidosX</h1>
-      <p className="mt-2 text-texto-sec">Prueba de Tailwind y de los colores del diseño</p>
-      <button className="mt-4 rounded-lg bg-primario px-6 py-2.5 font-semibold text-white hover:bg-vino">
-        Botón primario
-      </button>
-    </div>
+    <Routes>
+      <Route path="/" element={<Navigate to="/admin/usuarios" replace />} />
+      <Route path="/admin/usuarios" element={<Usuarios />} />
+      <Route path="/admin/usuarios/nueva" element={<CrearCuentaPersonal />} />
+      <Route path="/admin/sedes" element={<Sedes />} />
+      <Route path="/admin/sedes/nueva" element={<FormularioSede />} />
+      <Route path="/admin/sedes/:id/editar" element={<FormularioSede />} />
+      <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
+    </Routes>
   )
 }
