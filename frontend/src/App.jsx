@@ -12,6 +12,7 @@ import Inventario from "./pages/operador/Inventario"
 import AccesoDenegado from "./pages/AccesoDenegado"
 import Direcciones from "./pages/cliente/Direcciones"
 import Perfil from "./pages/cliente/Perfil"
+import AgregarDireccion from "./pages/cliente/AgregarDireccion"
 
 export default function App() {
   return (
@@ -33,6 +34,8 @@ export default function App() {
       <Route path="/acceso-denegado" element={<AccesoDenegado />} />
       <Route path="/cliente/direcciones" element={<Direcciones />} />
       <Route path="/cliente/perfil" element={<Perfil />} />
+      <Route path="/cliente/direcciones/nueva" element={<AgregarDireccion />} />
+      <Route path="/cliente/direcciones/:id/editar" element={<AgregarDireccion />} />
       <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
     </Routes>
   )
