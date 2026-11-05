@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    CatalogoSedeView,
     CategoriaDetailView,
     CategoriaListCreateView,
     ComboDetailView,
@@ -45,5 +46,10 @@ urlpatterns = [
         "combos/<uuid:pk>/",
         ComboDetailView.as_view(),
         name="combo_detail",
+    ),
+    path(
+        "sedes/<uuid:sede_id>/catalogo/",
+        CatalogoSedeView.as_view(),
+        name="catalogo_sede",
     ),
 ]

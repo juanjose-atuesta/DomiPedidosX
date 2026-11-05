@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import EsAdmin, EsOperador
+from apps.inventario.models import InventarioSede
+from apps.sedes.models import Sede
 from apps.usuarios.models import Rol
 
 from .models import Categoria, Producto
@@ -11,6 +13,7 @@ from .serializers import (
     CategoriaSerializer,
     ComboSerializer,
     GrupoOpcionSerializer,
+    ProductoCatalogoSedeSerializer,
     ProductoSerializer,
 )
 from .services import (
@@ -404,3 +407,36 @@ class ComboDetailView(APIView):
 
         desactivar_combo(pk)
         return Response({"mensaje": "Combo desactivado correctamente."})
+
+
+class CatalogoSedeView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, sede_id):
+        sede = Sede.objects.filter(pk=sede_id, activa=True).first()
+        if sede is None:
+            return Response(
+                {"detail": "Sede no encontrada."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        inventarios = (
+            InventarioSede.objects.filter(
+                sede=sede,
+                disponible_en_sede=True,
+                producto__disponible=True,
+            )
+            .select_related("producto")
+            .prefetch_related("producto__grupos_opcion__opciones")
+            .order_by("producto__nombre")
+        )
+
+        productos = []
+        for inventario in inventarios:
+            producto = inventario.producto
+            producto.agotado = inventario.agotado
+            productos.append(producto)
+
+        return Response(
+            ProductoCatalogoSedeSerializer(productos, many=True).data
+        )

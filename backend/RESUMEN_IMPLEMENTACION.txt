@@ -195,6 +195,45 @@ Cambios realizados en la HU 9:
 - config/urls.py: montaje de api/promociones/.
 - tests.py: 10 pruebas de combos en menu y 13 pruebas de promociones.
 
+HU 10 - Inventario por sede y catalogo publico
+- GET    /api/inventario/sedes/<uuid:sede_id>/ -> listar inventario de la sede (operador/admin).
+- POST   /api/inventario/sedes/<uuid:sede_id>/ -> crear o actualizar inventario (operador/admin).
+- PUT    /api/inventario/sedes/<uuid:sede_id>/ -> actualizar inventario por producto_id (operador/admin).
+- PATCH  /api/inventario/sedes/<uuid:sede_id>/ -> actualizar campos del inventario (operador/admin).
+- DELETE /api/inventario/sedes/<uuid:sede_id>/ -> eliminar inventario de un producto (operador/admin).
+- GET    /api/menu/sedes/<uuid:sede_id>/catalogo/ -> catalogo publico por sede (AllowAny).
+- InventarioSede expone producto_id, producto_nombre, disponible_en_sede,
+  controla_stock, stock_actual, stock_minimo, agotado y stock_bajo.
+- POST hace upsert por (sede, producto): responde 201 al crear y 200 al
+  actualizar; PUT/PATCH requieren producto_id en el cuerpo.
+- Se valida que la sede exista y este activa, que el producto exista y este
+  disponible, y que stock_actual/stock_minimo sean enteros no negativos.
+- Si controla_stock=True y stock_actual <= stock_minimo, se crea una
+  Notificacion de tipo alerta_stock_bajo, canal sistema, asociada a la sede.
+- El catalogo publico solo devuelve productos con disponible_en_sede=True y
+  Producto.disponible=True de una sede activa; agrega el flag agotado calculado
+  por InventarioSede (stock_actual <= 0 y controla_stock=True).
+- Errores: 400 por datos invalidos o sede/producto no habilitados, 401 sin
+  token, 403 para roles distintos de operador/admin y 404 para sede o
+  inventario inexistente.
+
+Cambios realizados en la HU 10:
+- apps/notificaciones/services.py: crear_alerta_stock_bajo, que registra la
+  Notificacion asociada a la sede con el detalle del producto y las unidades.
+- apps/inventario/services.py: asignar_o_actualizar_inventario_sede y
+  cambiar_disponibilidad_producto_sede, con transacciones atomicas,
+  validaciones y disparo automatico de la alerta de stock bajo.
+- apps/inventario/serializers.py: InventarioSedeSerializer con campos de
+  lectura agotado/stock_bajo y producto_id de escritura.
+- apps/inventario/views.py: InventarioSedeView con GET/POST/PUT/PATCH/DELETE
+  protegida con EsOperador | EsAdmin.
+- apps/inventario/urls.py: ruta sedes/<uuid:sede_id>/.
+- apps/menu/serializers.py: ProductoCatalogoSedeSerializer con el flag agotado.
+- apps/menu/views.py: CatalogoSedeView publica, filtrada por inventario de sede.
+- apps/menu/urls.py: ruta sedes/<uuid:sede_id>/catalogo/.
+- config/urls.py: montaje de api/inventario/.
+- tests.py: 9 pruebas de inventario y 3 pruebas de catalogo por sede.
+
 Cambios realizados en las HU 5 y 6:
 - services.py: solicitar_recuperacion_password, confirmar_recuperacion_password
   y actualizar_perfil_usuario.
@@ -218,7 +257,7 @@ Cambios realizados en el modulo de sedes (HU 7):
 
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    94 passed, 67 subtests passed
+    106 passed, 72 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).
@@ -226,11 +265,11 @@ Resultado de pruebas:
     .venv/bin/python manage.py makemigrations --check --dry-run
     No changes detected
 
-Las 94 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
+Las 106 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
 HU 4 (registro de personal), 7 de la HU 5 (recuperacion de contrasena),
 4 de la HU 6 (edicion de perfil), 15 de la HU 7 (gestion de sedes),
-25 de la HU 8/HU 9 de menu y combos (15 del catalogo base y 10 de combos)
-y 13 de promociones (HU 9).
+25 de la HU 8/HU 9 de menu y combos (15 del catalogo base y 10 de combos),
+13 de promociones (HU 9) y 12 de inventario y catalogo por sede (HU 10).
 
 
 ==============================================================================

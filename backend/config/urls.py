@@ -30,4 +30,6 @@ urlpatterns = [
     path("api/menu/", include("apps.menu.urls")),
     # Promociones con vigencia y cupo diario
     path("api/promociones/", include("apps.promociones.urls")),
+    # Disponibilidad e inventario por sede
+    path("api/inventario/", include("apps.inventario.urls")),
 ]

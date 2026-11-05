@@ -87,6 +87,13 @@ class ProductoSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "disponible", "grupos_opcion")
 
 
+class ProductoCatalogoSedeSerializer(ProductoSerializer):
+    agotado = serializers.BooleanField(read_only=True)
+
+    class Meta(ProductoSerializer.Meta):
+        fields = ProductoSerializer.Meta.fields + ("agotado",)
+
+
 class ItemComboSerializer(serializers.ModelSerializer):
     producto_id = serializers.PrimaryKeyRelatedField(
         source="producto",

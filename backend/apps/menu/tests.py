@@ -5,6 +5,8 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.inventario.models import InventarioSede
+from apps.sedes.models import Sede
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -779,3 +781,138 @@ class ComboGestionTests(APITestCase):
             response_anonima.status_code, status.HTTP_401_UNAUTHORIZED
         )
         self.assertFalse(Producto.objects.filter(es_combo=True).exists())
+
+
+class CatalogoSedeTests(APITestCase):
+    def setUp(self):
+        self.sede = Sede.objects.create(
+            nombre="Sede Centro",
+            direccion="Calle 10 # 20-30",
+        )
+        self.categoria = Categoria.objects.create(nombre="Bebidas")
+        self.producto_agotado = Producto.objects.create(
+            categoria=self.categoria,
+            nombre="Jugo natural",
+            precio_base=Decimal("8000.00"),
+            tiempo_preparacion_min=5,
+        )
+        self.producto_disponible = Producto.objects.create(
+            categoria=self.categoria,
+            nombre="Cafe",
+            precio_base=Decimal("4000.00"),
+            tiempo_preparacion_min=3,
+        )
+        self.producto_oculto_sede = Producto.objects.create(
+            categoria=self.categoria,
+            nombre="Te",
+            precio_base=Decimal("3000.00"),
+            tiempo_preparacion_min=2,
+        )
+        self.producto_sin_inventario = Producto.objects.create(
+            categoria=self.categoria,
+            nombre="Chocolate",
+            precio_base=Decimal("6000.00"),
+            tiempo_preparacion_min=2,
+        )
+        self.producto_no_disponible = Producto.objects.create(
+            categoria=self.categoria,
+            nombre="Producto retirado",
+            precio_base=Decimal("7000.00"),
+            tiempo_preparacion_min=2,
+            disponible=False,
+        )
+
+        InventarioSede.objects.create(
+            sede=self.sede,
+            producto=self.producto_agotado,
+            disponible_en_sede=True,
+            controla_stock=True,
+            stock_actual=0,
+            stock_minimo=5,
+        )
+        InventarioSede.objects.create(
+            sede=self.sede,
+            producto=self.producto_disponible,
+            disponible_en_sede=True,
+            controla_stock=True,
+            stock_actual=10,
+            stock_minimo=5,
+        )
+        InventarioSede.objects.create(
+            sede=self.sede,
+            producto=self.producto_oculto_sede,
+            disponible_en_sede=False,
+            controla_stock=True,
+            stock_actual=10,
+            stock_minimo=5,
+        )
+        InventarioSede.objects.create(
+            sede=self.sede,
+            producto=self.producto_no_disponible,
+            disponible_en_sede=True,
+            controla_stock=True,
+            stock_actual=10,
+            stock_minimo=5,
+        )
+
+        self.catalogo_url = reverse(
+            "catalogo_sede", args=[self.sede.pk]
+        )
+
+    def test_catalogo_publico_filtra_por_sede_y_marca_agotados(self):
+        response = self.client.get(self.catalogo_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        productos = {producto["id"]: producto for producto in response.data}
+        self.assertEqual(len(productos), 2)
+        self.assertIn(str(self.producto_agotado.pk), productos)
+        self.assertIn(str(self.producto_disponible.pk), productos)
+        self.assertNotIn(str(self.producto_oculto_sede.pk), productos)
+        self.assertNotIn(str(self.producto_sin_inventario.pk), productos)
+        self.assertNotIn(str(self.producto_no_disponible.pk), productos)
+
+        self.assertTrue(productos[str(self.producto_agotado.pk)]["agotado"])
+        self.assertFalse(
+            productos[str(self.producto_disponible.pk)]["agotado"]
+        )
+
+    def test_catalogo_no_marca_agotado_si_no_controla_stock(self):
+        producto_sin_control = Producto.objects.create(
+            categoria=self.categoria,
+            nombre="Producto sin control",
+            precio_base=Decimal("9000.00"),
+            tiempo_preparacion_min=4,
+        )
+        InventarioSede.objects.create(
+            sede=self.sede,
+            producto=producto_sin_control,
+            disponible_en_sede=True,
+            controla_stock=False,
+            stock_actual=0,
+            stock_minimo=5,
+        )
+
+        response = self.client.get(self.catalogo_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        productos = {producto["id"]: producto for producto in response.data}
+        self.assertIn(str(producto_sin_control.pk), productos)
+        self.assertFalse(
+            productos[str(producto_sin_control.pk)]["agotado"]
+        )
+
+    def test_catalogo_de_sede_inactiva_o_inexistente_responde_404(self):
+        sede_inactiva = Sede.objects.create(
+            nombre="Sede cerrada",
+            direccion="Calle 1 # 2-3",
+            activa=False,
+        )
+
+        for sede_id in (sede_inactiva.pk, uuid4()):
+            with self.subTest(sede_id=sede_id):
+                response = self.client.get(
+                    reverse("catalogo_sede", args=[sede_id])
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_404_NOT_FOUND
+                )
