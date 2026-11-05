@@ -9,15 +9,19 @@ from apps.usuarios.models import Rol
 from .models import Categoria, Producto
 from .serializers import (
     CategoriaSerializer,
+    ComboSerializer,
     GrupoOpcionSerializer,
     ProductoSerializer,
 )
 from .services import (
     actualizar_categoria,
+    actualizar_combo,
     actualizar_producto,
     configurar_grupo_opciones,
     crear_categoria,
+    crear_combo,
     crear_producto,
+    desactivar_combo,
     desactivar_producto,
 )
 
@@ -52,11 +56,29 @@ def _obtener_producto(pk):
         return None
 
 
+def _obtener_combo(pk):
+    try:
+        return (
+            Producto.objects.filter(es_combo=True)
+            .prefetch_related("componentes__producto")
+            .get(pk=pk)
+        )
+    except (Producto.DoesNotExist, DjangoValidationError, ValueError):
+        return None
+
+
 def _datos_producto(validated_data):
     datos = dict(validated_data)
     if "categoria" in datos:
         categoria = datos.pop("categoria")
         datos["categoria_id"] = getattr(categoria, "pk", None)
+    return datos
+
+
+def _datos_combo(validated_data):
+    datos = dict(validated_data)
+    if "componentes" in datos:
+        datos["items_combo"] = datos.pop("componentes")
     return datos
 
 
@@ -287,3 +309,98 @@ class ProductoOpcionesView(APIView):
             GrupoOpcionSerializer(grupo).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class ComboListCreateView(APIView):
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [PERMISO_GESTION()]
+        return [permissions.AllowAny()]
+
+    def get(self, request):
+        combos = (
+            Producto.objects.filter(es_combo=True, disponible=True)
+            .prefetch_related("componentes__producto")
+            .order_by("nombre")
+        )
+        return Response(ComboSerializer(combos, many=True).data)
+
+    def post(self, request):
+        serializer = ComboSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        datos = _datos_combo(serializer.validated_data)
+        try:
+            combo = crear_combo(**datos)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            ComboSerializer(combo).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ComboDetailView(APIView):
+    def get_permissions(self):
+        if self.request.method in ("PUT", "PATCH", "DELETE"):
+            return [PERMISO_GESTION()]
+        return [permissions.AllowAny()]
+
+    def get(self, request, pk):
+        combo = _obtener_combo(pk)
+        if combo is None:
+            return Response(
+                {"detail": "Combo no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not combo.disponible and not _es_gestor(request):
+            return Response(
+                {"detail": "Combo no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(ComboSerializer(combo).data)
+
+    def put(self, request, pk):
+        return self._actualizar(request, pk, partial=False)
+
+    def patch(self, request, pk):
+        return self._actualizar(request, pk, partial=True)
+
+    def _actualizar(self, request, pk, *, partial):
+        combo = _obtener_combo(pk)
+        if combo is None:
+            return Response(
+                {"detail": "Combo no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = ComboSerializer(
+            combo, data=request.data, partial=partial
+        )
+        serializer.is_valid(raise_exception=True)
+
+        datos = _datos_combo(serializer.validated_data)
+        try:
+            combo = actualizar_combo(pk, **datos)
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(ComboSerializer(combo).data)
+
+    def delete(self, request, pk):
+        combo = _obtener_combo(pk)
+        if combo is None:
+            return Response(
+                {"detail": "Combo no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        desactivar_combo(pk)
+        return Response({"mensaje": "Combo desactivado correctamente."})

@@ -28,4 +28,6 @@ urlpatterns = [
     path("api/sedes/", include("apps.sedes.urls")),
     # Catálogo del menú: categorías, productos y grupos de opciones
     path("api/menu/", include("apps.menu.urls")),
+    # Promociones con vigencia y cupo diario
+    path("api/promociones/", include("apps.promociones.urls")),
 ]

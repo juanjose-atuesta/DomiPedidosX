@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import uuid4
 
 from django.urls import reverse
 from rest_framework import status
@@ -12,6 +13,7 @@ from .models import (
     GrupoOpcion,
     OpcionProducto,
     Producto,
+    ProductoCombo,
     TipoGrupoOpcion,
 )
 
@@ -485,3 +487,295 @@ class MenuGestionTests(APITestCase):
 
         self.assertEqual(Categoria.objects.count(), 1)
         self.assertEqual(Producto.objects.count(), 1)
+
+
+class ComboGestionTests(APITestCase):
+    def setUp(self):
+        self.admin = self._crear_usuario(Rol.ADMIN, "admin.combo@example.com")
+        self.operador = self._crear_usuario(
+            Rol.OPERADOR, "operador.combo@example.com"
+        )
+        self.cliente = self._crear_usuario(
+            Rol.CLIENTE, "cliente.combo@example.com"
+        )
+        self.repartidor = self._crear_usuario(
+            Rol.REPARTIDOR, "repartidor.combo@example.com"
+        )
+
+        self.admin_token = self._token(self.admin)
+        self.operador_token = self._token(self.operador)
+        self.cliente_token = self._token(self.cliente)
+        self.repartidor_token = self._token(self.repartidor)
+
+        self.producto_1 = Producto.objects.create(
+            nombre="Hamburguesa",
+            precio_base=Decimal("12000.00"),
+            tiempo_preparacion_min=10,
+        )
+        self.producto_2 = Producto.objects.create(
+            nombre="Papas",
+            precio_base=Decimal("5000.00"),
+            tiempo_preparacion_min=8,
+        )
+
+        self.combo_list_url = reverse("combo_list_create")
+
+    def _crear_usuario(self, rol, email):
+        return User.objects.create_user(
+            email=email,
+            password=PASSWORD,
+            nombre="Prueba",
+            apellido="Combo",
+            telefono="3000000000",
+            rol=rol,
+        )
+
+    def _token(self, usuario):
+        return str(LoginSerializer.get_token(usuario).access_token)
+
+    def _auth(self, token):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _payload_combo(self, **overrides):
+        data = {
+            "nombre": "Combo clasico",
+            "descripcion": "Hamburguesa con papas",
+            "precio_base": "15000.00",
+            "items_combo": [
+                {
+                    "producto_id": str(self.producto_1.pk),
+                    "cantidad": 1,
+                },
+                {
+                    "producto_id": str(self.producto_2.pk),
+                    "cantidad": 2,
+                },
+            ],
+        }
+        data.update(overrides)
+        return data
+
+    def _crear_combo(self, **overrides):
+        response = self.client.post(
+            self.combo_list_url,
+            self._payload_combo(**overrides),
+            format="json",
+            **self._auth(self.operador_token),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return response
+
+    def test_admin_y_operador_crean_combo_con_multiples_productos(self):
+        for token, nombre in (
+            (self.admin_token, "Combo admin"),
+            (self.operador_token, "Combo operador"),
+        ):
+            with self.subTest(nombre=nombre):
+                response = self.client.post(
+                    self.combo_list_url,
+                    self._payload_combo(nombre=nombre),
+                    format="json",
+                    **self._auth(token),
+                )
+
+                self.assertEqual(
+                    response.status_code, status.HTTP_201_CREATED
+                )
+                self.assertTrue(response.data["es_combo"])
+                self.assertEqual(len(response.data["items_combo"]), 2)
+
+                combo = Producto.objects.get(nombre=nombre)
+                self.assertTrue(combo.es_combo)
+                self.assertEqual(combo.componentes.count(), 2)
+                self.assertEqual(
+                    combo.componentes.get(producto=self.producto_2).cantidad,
+                    2,
+                )
+
+    def test_rechaza_combo_sin_productos(self):
+        response = self.client.post(
+            self.combo_list_url,
+            self._payload_combo(items_combo=[]),
+            format="json",
+            **self._auth(self.operador_token),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Producto.objects.filter(es_combo=True).exists())
+
+    def test_rechaza_cantidad_invalida_en_componente(self):
+        for cantidad in (0, -1, "abc"):
+            with self.subTest(cantidad=cantidad):
+                response = self.client.post(
+                    self.combo_list_url,
+                    self._payload_combo(
+                        items_combo=[
+                            {
+                                "producto_id": str(self.producto_1.pk),
+                                "cantidad": cantidad,
+                            }
+                        ]
+                    ),
+                    format="json",
+                    **self._auth(self.operador_token),
+                )
+
+                self.assertEqual(
+                    response.status_code, status.HTTP_400_BAD_REQUEST
+                )
+                self.assertFalse(
+                    Producto.objects.filter(es_combo=True).exists()
+                )
+
+    def test_rechaza_producto_inexistente_o_repetido(self):
+        casos = (
+            [
+                {
+                    "producto_id": str(uuid4()),
+                    "cantidad": 1,
+                }
+            ],
+            [
+                {
+                    "producto_id": str(self.producto_1.pk),
+                    "cantidad": 1,
+                },
+                {
+                    "producto_id": str(self.producto_1.pk),
+                    "cantidad": 2,
+                },
+            ],
+        )
+
+        for items in casos:
+            with self.subTest(items=items):
+                response = self.client.post(
+                    self.combo_list_url,
+                    self._payload_combo(items_combo=items),
+                    format="json",
+                    **self._auth(self.operador_token),
+                )
+
+                self.assertEqual(
+                    response.status_code, status.HTTP_400_BAD_REQUEST
+                )
+                self.assertFalse(
+                    Producto.objects.filter(es_combo=True).exists()
+                )
+
+    def test_lista_combos_solo_incluye_disponibles(self):
+        self._crear_combo()
+        combo = Producto.objects.get(nombre="Combo clasico")
+        combo.disponible = False
+        combo.save(update_fields=["disponible"])
+
+        response = self.client.get(self.combo_list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn(
+            str(combo.pk), {item["id"] for item in response.data}
+        )
+        self.assertEqual(ProductoCombo.objects.count(), 2)
+
+    def test_detalle_combo_no_disponible_solo_visible_para_gestores(self):
+        self._crear_combo()
+        combo = Producto.objects.get(nombre="Combo clasico")
+        combo.disponible = False
+        combo.save(update_fields=["disponible"])
+        detail_url = reverse("combo_detail", args=[combo.pk])
+
+        response_publica = self.client.get(detail_url)
+        response_operador = self.client.get(
+            detail_url, **self._auth(self.operador_token)
+        )
+
+        self.assertEqual(
+            response_publica.status_code, status.HTTP_404_NOT_FOUND
+        )
+        self.assertEqual(response_operador.status_code, status.HTTP_200_OK)
+
+    def test_operador_actualiza_combo_y_reemplaza_componentes(self):
+        self._crear_combo()
+        combo = Producto.objects.get(nombre="Combo clasico")
+        detail_url = reverse("combo_detail", args=[combo.pk])
+
+        response = self.client.patch(
+            detail_url,
+            {
+                "nombre": "Combo ligero",
+                "precio_base": "13000.00",
+                "items_combo": [
+                    {
+                        "producto_id": str(self.producto_1.pk),
+                        "cantidad": 1,
+                    }
+                ],
+            },
+            format="json",
+            **self._auth(self.operador_token),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        combo.refresh_from_db()
+        self.assertEqual(combo.nombre, "Combo ligero")
+        self.assertEqual(combo.precio_base, Decimal("13000.00"))
+        self.assertEqual(combo.componentes.count(), 1)
+        self.assertEqual(combo.componentes.get().producto, self.producto_1)
+
+    def test_rechaza_que_un_combo_se_incluya_a_si_mismo(self):
+        self._crear_combo()
+        combo = Producto.objects.get(nombre="Combo clasico")
+        detail_url = reverse("combo_detail", args=[combo.pk])
+
+        response = self.client.patch(
+            detail_url,
+            {
+                "items_combo": [
+                    {
+                        "producto_id": str(combo.pk),
+                        "cantidad": 1,
+                    }
+                ]
+            },
+            format="json",
+            **self._auth(self.operador_token),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(combo.componentes.count(), 2)
+
+    def test_delete_combo_hace_borrado_logico(self):
+        self._crear_combo()
+        combo = Producto.objects.get(nombre="Combo clasico")
+        detail_url = reverse("combo_detail", args=[combo.pk])
+
+        response = self.client.delete(
+            detail_url, **self._auth(self.operador_token)
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("mensaje", response.data)
+        combo.refresh_from_db()
+        self.assertFalse(combo.disponible)
+        self.assertTrue(Producto.objects.filter(pk=combo.pk).exists())
+
+    def test_clientes_repartidores_y_anonimos_no_crean_combos(self):
+        for token in (self.cliente_token, self.repartidor_token):
+            with self.subTest(token=token):
+                response = self.client.post(
+                    self.combo_list_url,
+                    self._payload_combo(),
+                    format="json",
+                    **self._auth(token),
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_403_FORBIDDEN
+                )
+
+        response_anonima = self.client.post(
+            self.combo_list_url, self._payload_combo(), format="json"
+        )
+        self.assertEqual(
+            response_anonima.status_code, status.HTTP_401_UNAUTHORIZED
+        )
+        self.assertFalse(Producto.objects.filter(es_combo=True).exists())

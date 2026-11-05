@@ -1,6 +1,12 @@
 from rest_framework import serializers
 
-from .models import Categoria, GrupoOpcion, OpcionProducto, Producto
+from .models import (
+    Categoria,
+    GrupoOpcion,
+    OpcionProducto,
+    Producto,
+    ProductoCombo,
+)
 
 
 class CategoriaSerializer(serializers.ModelSerializer):
@@ -79,3 +85,44 @@ class ProductoSerializer(serializers.ModelSerializer):
             "grupos_opcion",
         )
         read_only_fields = ("id", "disponible", "grupos_opcion")
+
+
+class ItemComboSerializer(serializers.ModelSerializer):
+    producto_id = serializers.PrimaryKeyRelatedField(
+        source="producto",
+        queryset=Producto.objects.all(),
+    )
+    producto_nombre = serializers.CharField(
+        source="producto.nombre", read_only=True
+    )
+    cantidad = serializers.IntegerField(min_value=1, required=False)
+
+    class Meta:
+        model = ProductoCombo
+        fields = ("producto_id", "producto_nombre", "cantidad")
+
+
+class ComboSerializer(serializers.ModelSerializer):
+    precio_base = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=0,
+    )
+    items_combo = ItemComboSerializer(
+        source="componentes",
+        many=True,
+        allow_empty=False,
+    )
+
+    class Meta:
+        model = Producto
+        fields = (
+            "id",
+            "nombre",
+            "descripcion",
+            "precio_base",
+            "es_combo",
+            "disponible",
+            "items_combo",
+        )
+        read_only_fields = ("id", "es_combo", "disponible")

@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     CategoriaDetailView,
     CategoriaListCreateView,
+    ComboDetailView,
+    ComboListCreateView,
     ProductoDetailView,
     ProductoListCreateView,
     ProductoOpcionesView,
@@ -33,5 +35,15 @@ urlpatterns = [
         "productos/<uuid:pk>/opciones/",
         ProductoOpcionesView.as_view(),
         name="producto_opciones",
+    ),
+    path(
+        "combos/",
+        ComboListCreateView.as_view(),
+        name="combo_list_create",
+    ),
+    path(
+        "combos/<uuid:pk>/",
+        ComboDetailView.as_view(),
+        name="combo_detail",
     ),
 ]

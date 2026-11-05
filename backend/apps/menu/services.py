@@ -2,7 +2,14 @@ from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 
-from .models import Categoria, GrupoOpcion, OpcionProducto, Producto, TipoGrupoOpcion
+from .models import (
+    Categoria,
+    GrupoOpcion,
+    OpcionProducto,
+    Producto,
+    ProductoCombo,
+    TipoGrupoOpcion,
+)
 
 CAMPOS_CATEGORIA = ("nombre", "descripcion", "orden", "activa")
 CAMPOS_PRODUCTO_SIMPLES = (
@@ -50,6 +57,67 @@ def _obtener_producto(producto_id):
         return Producto.objects.get(pk=producto_id)
     except (Producto.DoesNotExist, ValueError, TypeError):
         raise ValueError("El producto indicado no existe.")
+
+
+def _resolver_producto(valor):
+    if isinstance(valor, Producto):
+        return valor
+    return _obtener_producto(valor)
+
+
+def _normalizar_items_combo(items_combo):
+    if not items_combo:
+        raise ValueError("El combo debe incluir al menos un producto.")
+
+    items_normalizados = []
+    productos_vistos = set()
+
+    for item in items_combo:
+        if not isinstance(item, dict):
+            raise ValueError("Cada componente del combo debe ser un objeto.")
+
+        producto = item.get("producto")
+        if producto is None:
+            producto = item.get("producto_id")
+        producto = _resolver_producto(producto)
+
+        if producto.pk in productos_vistos:
+            raise ValueError("No se puede repetir un producto en el combo.")
+
+        cantidad = _entero_positivo(
+            item.get("cantidad", 1), "cantidad del componente"
+        )
+
+        productos_vistos.add(producto.pk)
+        items_normalizados.append(
+            {"producto": producto, "cantidad": cantidad}
+        )
+
+    return items_normalizados
+
+
+def _validar_sin_ciclos(combo_id):
+    en_camino = set()
+    visitados = set()
+
+    def visitar(producto_id):
+        if producto_id in en_camino:
+            raise ValueError("El combo no puede contener ciclos.")
+        if producto_id in visitados:
+            return
+
+        en_camino.add(producto_id)
+        componentes = ProductoCombo.objects.filter(
+            combo_id=producto_id
+        ).values_list("producto_id", flat=True)
+
+        for componente_id in componentes:
+            visitar(componente_id)
+
+        en_camino.remove(producto_id)
+        visitados.add(producto_id)
+
+    visitar(combo_id)
 
 
 def _normalizar_opcion(opcion):
@@ -177,6 +245,108 @@ def desactivar_producto(producto_id):
             producto.disponible = False
             producto.save(update_fields=["disponible"])
         return producto
+
+
+def crear_combo(
+    *,
+    nombre,
+    descripcion="",
+    precio_base,
+    items_combo,
+):
+    nombre = str(nombre).strip()
+    if not nombre:
+        raise ValueError("El nombre del combo es obligatorio.")
+
+    precio = _decimal_no_negativo(precio_base, "precio_base")
+    items_normalizados = _normalizar_items_combo(items_combo)
+
+    with transaction.atomic():
+        combo = Producto.objects.create(
+            nombre=nombre,
+            descripcion=descripcion,
+            precio_base=precio,
+            es_combo=True,
+        )
+        ProductoCombo.objects.bulk_create(
+            [
+                ProductoCombo(
+                    combo=combo,
+                    producto=item["producto"],
+                    cantidad=item["cantidad"],
+                )
+                for item in items_normalizados
+            ]
+        )
+        _validar_sin_ciclos(combo.pk)
+
+        return combo
+
+
+def actualizar_combo(combo_id, **datos):
+    with transaction.atomic():
+        combo = _obtener_producto(combo_id)
+        if not combo.es_combo:
+            raise ValueError("El producto indicado no es un combo.")
+
+        campos_actualizados = []
+
+        if "nombre" in datos:
+            nombre = str(datos["nombre"]).strip()
+            if not nombre:
+                raise ValueError("El nombre del combo es obligatorio.")
+            combo.nombre = nombre
+            campos_actualizados.append("nombre")
+
+        if "descripcion" in datos:
+            combo.descripcion = datos["descripcion"]
+            campos_actualizados.append("descripcion")
+
+        if "precio_base" in datos:
+            combo.precio_base = _decimal_no_negativo(
+                datos["precio_base"], "precio_base"
+            )
+            campos_actualizados.append("precio_base")
+
+        if campos_actualizados:
+            combo.save(update_fields=campos_actualizados)
+
+        if "items_combo" in datos and datos["items_combo"] is not None:
+            items_normalizados = _normalizar_items_combo(
+                datos["items_combo"]
+            )
+            if any(
+                item["producto"].pk == combo.pk
+                for item in items_normalizados
+            ):
+                raise ValueError("Un combo no puede incluirse a si mismo.")
+            ProductoCombo.objects.filter(combo=combo).delete()
+            ProductoCombo.objects.bulk_create(
+                [
+                    ProductoCombo(
+                        combo=combo,
+                        producto=item["producto"],
+                        cantidad=item["cantidad"],
+                    )
+                    for item in items_normalizados
+                ]
+            )
+            _validar_sin_ciclos(combo.pk)
+
+        return combo
+
+
+def desactivar_combo(combo_id):
+    with transaction.atomic():
+        combo = _obtener_producto(combo_id)
+        if not combo.es_combo:
+            raise ValueError("El producto indicado no es un combo.")
+
+        if combo.disponible:
+            combo.disponible = False
+            combo.save(update_fields=["disponible"])
+
+        return combo
 
 
 def configurar_grupo_opciones(
