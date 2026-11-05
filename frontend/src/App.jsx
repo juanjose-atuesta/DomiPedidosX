@@ -9,6 +9,8 @@ import FormularioProducto from "./pages/operador/FormularioProducto"
 import Promociones from "./pages/operador/Promociones"
 import FormularioPromocion from "./pages/operador/FormularioPromocion"
 import Inventario from "./pages/operador/Inventario"
+import AccesoDenegado from "./pages/AccesoDenegado"
+import Direcciones from "./pages/cliente/Direcciones"
 
 export default function App() {
   return (
@@ -27,6 +29,8 @@ export default function App() {
       <Route path="/operador/promociones/nueva" element={<FormularioPromocion />} />
       <Route path="/operador/promociones/:id/editar" element={<FormularioPromocion />} />
       <Route path="/operador/inventario" element={<Inventario />} />
+      <Route path="/acceso-denegado" element={<AccesoDenegado />} />
+      <Route path="/cliente/direcciones" element={<Direcciones />} />
       <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
     </Routes>
   )

@@ -14,14 +14,17 @@ const ESTILOS = {
 export default function Boton({
   tipo = "primario",
   anchoCompleto = false,
+  grande = false,
   className = "",
   children,
   ...props
 }) {
+  const tamano = grande ? "h-14 rounded-full" : "h-11 rounded-lg"
+
   return (
     <button
       type="button"
-      className={`inline-flex shrink-0 whitespace-nowrap h-11 items-center justify-center rounded-lg px-6 text-base font-semibold transition-colors disabled:cursor-not-allowed ${ESTILOS[tipo]} ${anchoCompleto ? "w-full" : ""} ${className}`}
+      className={`inline-flex shrink-0 items-center justify-center whitespace-nowrap px-6 text-base font-semibold transition-colors disabled:cursor-not-allowed ${tamano} ${ESTILOS[tipo]} ${anchoCompleto ? "w-full" : ""} ${className}`}
       {...props}
     >
       {children}
