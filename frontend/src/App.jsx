@@ -5,6 +5,7 @@ import Sedes from "./pages/admin/Sedes"
 import FormularioSede from "./pages/admin/FormularioSede"
 import Categorias from "./pages/operador/Categorias"
 import Productos from "./pages/operador/Productos"
+import FormularioProducto from "./pages/operador/FormularioProducto"
 
 export default function App() {
   return (
@@ -17,6 +18,8 @@ export default function App() {
       <Route path="/admin/sedes/:id/editar" element={<FormularioSede />} />
       <Route path="/operador/categorias" element={<Categorias />} />
       <Route path="/operador/productos" element={<Productos />} />
+      <Route path="/operador/productos/nuevo" element={<FormularioProducto />} />
+      <Route path="/operador/productos/:id/editar" element={<FormularioProducto />} />
       <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
     </Routes>
   )
