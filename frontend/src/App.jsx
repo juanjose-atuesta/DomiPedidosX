@@ -13,6 +13,10 @@ import AccesoDenegado from "./pages/AccesoDenegado"
 import Direcciones from "./pages/cliente/Direcciones"
 import Perfil from "./pages/cliente/Perfil"
 import AgregarDireccion from "./pages/cliente/AgregarDireccion"
+import Bienvenida from "./pages/auth/Bienvenida"
+import IniciarSesion from "./pages/auth/IniciarSesion"
+import RecuperarContrasena from "./pages/auth/RecuperarContrasena"
+import Registro from "./pages/auth/Registro"
 
 export default function App() {
   return (
@@ -36,6 +40,10 @@ export default function App() {
       <Route path="/cliente/perfil" element={<Perfil />} />
       <Route path="/cliente/direcciones/nueva" element={<AgregarDireccion />} />
       <Route path="/cliente/direcciones/:id/editar" element={<AgregarDireccion />} />
+      <Route path="/login" element={<Bienvenida />} />
+      <Route path="/iniciar-sesion" element={<IniciarSesion />} />
+      <Route path="/recuperar-contrasena" element={<RecuperarContrasena />} />
+      <Route path="/registro" element={<Registro />} />
       <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
     </Routes>
   )
