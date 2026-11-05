@@ -1,10 +1,13 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 
 from apps.core.permissions import EsAdmin
-
+from .models import Direccion
 from .serializers import (
     RegistroClienteSerializer,
     LoginSerializer,
@@ -14,6 +17,8 @@ from .serializers import (
     SolicitarPasswordResetSerializer,
     ConfirmarPasswordResetSerializer,
     ActualizarPerfilSerializer,
+    DireccionSerializer,
+    RolSerializer,
 )
 from .services import (
     registrar_cliente,
@@ -23,6 +28,11 @@ from .services import (
     actualizar_perfil_usuario,
 )
 
+User = get_user_model()
+
+# ==========================================
+# VISTAS DE DEVELOP (Login, Registro, etc.)
+# ==========================================
 
 class RegistroClienteView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -30,10 +40,8 @@ class RegistroClienteView(APIView):
     def post(self, request):
         serializer = RegistroClienteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         datos = serializer.validated_data
         usuario = registrar_cliente(**datos)
-
         return Response(
             {
                 "mensaje": "Usuario registrado exitosamente",
@@ -43,34 +51,15 @@ class RegistroClienteView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
-
 class LoginView(APIView):
-    """Endpoint de login.
-
-    Recibe email y contraseña, delega la validación a LoginSerializer y
-    responde 200 con {"access", "refresh"} o 401 con un mensaje genérico si
-    las credenciales no son válidas o el usuario está inactivo.
-    """
-
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        serializer = LoginSerializer(
-            data=request.data, context={"request": request}
-        )
+        serializer = LoginSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
-
 class MeView(APIView):
-    """Datos del usuario autenticado.
-
-    JWTAuthentication valida el Bearer token; si falta o es inválido responde
-    401. GET devuelve id, nombre, apellido, email, teléfono y rol. PATCH
-    permite actualizar únicamente nombre, apellido y teléfono.
-    """
-
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -78,36 +67,20 @@ class MeView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request):
-        serializer = ActualizarPerfilSerializer(
-            request.user, data=request.data, partial=True
-        )
+        serializer = ActualizarPerfilSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-
-        usuario = actualizar_perfil_usuario(
-            request.user, **serializer.validated_data
-        )
-        return Response(
-            UsuarioSerializer(usuario).data, status=status.HTTP_200_OK
-        )
-
+        usuario = actualizar_perfil_usuario(request.user, **serializer.validated_data)
+        return Response(UsuarioSerializer(usuario).data, status=status.HTTP_200_OK)
 
 class RegistroPersonalView(APIView):
-    """Registro de personal del restaurante por parte de un administrador.
-
-    Solo un usuario con rol admin puede crear operadores, cocineros,
-    repartidores o administradores adicionales, asignándoles sus sedes.
-    """
-
     permission_classes = [EsAdmin]
 
     def post(self, request):
         serializer = RegistroPersonalSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         datos = serializer.validated_data
         sedes_ids = datos.pop("sedes_ids", [])
         usuario = crear_usuario_personal(**datos, sedes_ids=sedes_ids)
-
         return Response(
             {
                 "mensaje": "Usuario de personal registrado exitosamente",
@@ -116,22 +89,13 @@ class RegistroPersonalView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
-
 class SolicitarPasswordResetView(APIView):
-    """Solicita el envío del correo de recuperación de contraseña.
-
-    Responde siempre el mismo mensaje, exista o no el correo, para no revelar
-    qué usuarios están registrados.
-    """
-
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = SolicitarPasswordResetSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         solicitar_recuperacion_password(**serializer.validated_data)
-
         return Response(
             {
                 "mensaje": (
@@ -142,29 +106,66 @@ class SolicitarPasswordResetView(APIView):
             status=status.HTTP_200_OK,
         )
 
-
 class ConfirmarPasswordResetView(APIView):
-    """Confirma el restablecimiento usando uidb64, token y nueva contraseña."""
-
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = ConfirmarPasswordResetSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         try:
             confirmar_recuperacion_password(**serializer.validated_data)
         except ValueError as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except DjangoValidationError as exc:
             return Response(
                 {"new_password": list(exc.messages)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
             {"mensaje": "Contraseña actualizada correctamente."},
             status=status.HTTP_200_OK,
         )
+
+# ==========================================
+# TUS VISTAS (HU 1.6, 1.9 y 1.10)
+# ==========================================
+
+class DesactivarUsuarioView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, pk):
+        usuario = get_object_or_404(User, pk=pk)
+        usuario.is_active = False
+        usuario.save()
+        return Response({"mensaje": "Cuenta desactivada exitosamente"}, status=status.HTTP_200_OK)
+
+class CambiarRolView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, pk):
+        usuario = get_object_or_404(User, pk=pk)
+        serializer = RolSerializer(data=request.data)
+        if serializer.is_valid():
+            usuario.rol = serializer.validated_data['rol']
+            usuario.save()
+            return Response({"mensaje": f"Rol actualizado a {usuario.rol}"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class DireccionListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        direcciones = Direccion.objects.filter(cliente=request.user, activa=True)
+        serializer = DireccionSerializer(direcciones, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        if Direccion.objects.filter(cliente=request.user, activa=True).count() >= 5:
+            return Response({"error": "Máximo 5 direcciones permitidas"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        serializer = DireccionSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(cliente=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    

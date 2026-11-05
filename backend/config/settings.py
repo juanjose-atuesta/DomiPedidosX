@@ -28,6 +28,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Terceros
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "corsheaders",
     # Apps del proyecto
     "apps.core",
     "apps.usuarios",
@@ -46,8 +50,6 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = "usuarios.User"
 
 # --- Django REST Framework ---------------------------------------------------
-# Por defecto toda la API exige autenticación; los endpoints públicos declaran
-# AllowAny explícitamente.
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -59,16 +61,16 @@ REST_FRAMEWORK = {
 
 # --- JWT ---------------------------------------------------------------------
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60), # Criterio: dura 60 min
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "AUTH_HEADER_TYPES": ("Bearer",),
-    # El usuario usa UUID como PK; simplejwt lo convierte a str en el claim.
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -97,7 +99,6 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 # --- Base de datos -----------------------------------------------------------
-# SQLite en local; en Supabase solo cambia DATABASE_URL en el .env
 DATABASES = {
     "default": env.db("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
 }
@@ -122,9 +123,11 @@ USE_TZ = True
 STATIC_URL = "static/"
 
 # --- Correo ------------------------------------------------------------------
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 MAILERS = {
     "default": {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
     },
 }
+
+# --- CORS --------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
