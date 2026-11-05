@@ -129,3 +129,12 @@ def cambiar_disponibilidad_producto_sede(
         )
         inventario.save(update_fields=["disponible_en_sede"])
         return inventario
+
+
+def descontar_stock_pedido(pedido):
+    """Compatibilidad: el descuento vive en el flujo de pedidos."""
+    from apps.pedidos.services import (
+        descontar_stock_pedido as _descontar_stock_pedido,
+    )
+
+    return _descontar_stock_pedido(pedido)

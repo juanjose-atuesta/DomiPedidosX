@@ -32,4 +32,6 @@ urlpatterns = [
     path("api/promociones/", include("apps.promociones.urls")),
     # Disponibilidad e inventario por sede
     path("api/inventario/", include("apps.inventario.urls")),
+    # Creación y confirmación de pedidos con descuento de inventario
+    path("api/pedidos/", include("apps.pedidos.urls")),
 ]

@@ -234,6 +234,45 @@ Cambios realizados en la HU 10:
 - config/urls.py: montaje de api/inventario/.
 - tests.py: 9 pruebas de inventario y 3 pruebas de catalogo por sede.
 
+HU 11 - Descuento automatico de inventario al confirmar pedidos
+- POST   /api/pedidos/ -> crear y confirmar pedido (cliente/operador/admin).
+- El cuerpo incluye sede_id, cliente_nombre, cliente_telefono, metodo_pago y
+  detalles: [{"producto_id": "<uuid>", "cantidad": 2, "notas_producto": "",
+  "opciones": ["<uuid>"]}, ...].
+- La creacion calcula precio_unitario, subtotal y total; registra Pedido,
+  DetallePedido, DetallePedidoOpcion e HistorialEstado en una transaccion.
+- descontar_stock_pedido recorre los detalles: los productos sencillos
+  descuentan su cantidad y los combos (es_combo=True) se descomponen con
+  ProductoCombo multiplicando la cantidad del pedido por la del componente.
+- Solo se descuenta inventario cuando existe InventarioSede para la sede y el
+  producto tiene controla_stock=True; las filas se bloquean con
+  select_for_update.
+- Si stock_actual < cantidad requerida se responde 400 con
+  "Stock insuficiente para el producto X en esta sede." y la transaccion
+  revierte el pedido, sus detalles y cualquier descuento previo.
+- Si tras el descuento stock_actual <= stock_minimo se crea una notificacion
+  alerta_stock_bajo mediante crear_alerta_stock_bajo.
+- Los pedidos usan tipo=recoger por defecto; si tipo=domicilio se exigen
+  direccion_entrega, entrega_lat y entrega_lng.
+- Errores: 400 por datos invalidos, stock insuficiente o descuento mayor al
+  total; 401 sin token y 403 para roles no autorizados.
+
+Cambios realizados en la HU 11:
+- apps/pedidos/services.py: crear_pedido y descontar_stock_pedido, con
+  transacciones atomicas, expansion de combos, bloqueo de inventario,
+  validacion de stock, descuento y alertas.
+- apps/pedidos/serializers.py: PedidoCreateSerializer con detalles y opciones,
+  PedidoSerializer y serializadores de detalle/opciones de salida.
+- apps/pedidos/views.py: PedidoListCreateView con POST y permisos
+  cliente/operador/admin.
+- apps/pedidos/urls.py: ruta de creacion/confirmacion de pedidos.
+- apps/inventario/services.py: reexportacion compatible de
+  descontar_stock_pedido.
+- config/urls.py: montaje de api/pedidos/.
+- apps/pedidos/tests.py: 6 pruebas de pedido simple, combo, stock
+  insuficiente con reversion, alerta de stock bajo, producto sin control de
+  stock y creacion por cliente.
+
 Cambios realizados en las HU 5 y 6:
 - services.py: solicitar_recuperacion_password, confirmar_recuperacion_password
   y actualizar_perfil_usuario.
@@ -257,7 +296,7 @@ Cambios realizados en el modulo de sedes (HU 7):
 
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    106 passed, 72 subtests passed
+    112 passed, 72 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).
@@ -265,11 +304,12 @@ Resultado de pruebas:
     .venv/bin/python manage.py makemigrations --check --dry-run
     No changes detected
 
-Las 106 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
+Las 112 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
 HU 4 (registro de personal), 7 de la HU 5 (recuperacion de contrasena),
 4 de la HU 6 (edicion de perfil), 15 de la HU 7 (gestion de sedes),
 25 de la HU 8/HU 9 de menu y combos (15 del catalogo base y 10 de combos),
-13 de promociones (HU 9) y 12 de inventario y catalogo por sede (HU 10).
+13 de promociones (HU 9), 12 de inventario y catalogo por sede (HU 10) y
+6 de descuento automatico de inventario en pedidos (HU 11).
 
 
 ==============================================================================
