@@ -4,7 +4,8 @@ Django settings for config project (DomiPedidosX).
 Los valores que cambian entre entornos (clave secreta, DEBUG, base de datos)
 se leen del archivo backend/.env, que NO se sube a Git.
 """
-from datetime import timedelta 
+
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -48,6 +49,25 @@ INSTALLED_APPS = [
 # Modelo de usuario propio: debe definirse ANTES de la primera migración
 AUTH_USER_MODEL = "usuarios.User"
 
+# --- Django REST Framework ---------------------------------------------------
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
+}
+
+# --- JWT ---------------------------------------------------------------------
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60), # Criterio: dura 60 min
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -79,7 +99,6 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 # --- Base de datos -----------------------------------------------------------
-# SQLite en local; en Supabase solo cambia DATABASE_URL en el .env
 DATABASES = {
     "default": env.db("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
 }
@@ -104,24 +123,10 @@ USE_TZ = True
 STATIC_URL = "static/"
 
 # --- Correo ------------------------------------------------------------------
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 MAILERS = {
     "default": {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
     },
-}
-
-# --- API REST y JWT ----------------------------------------------------------
-REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ),
-}
-
-SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),   # criterio 1
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
-    "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
 # --- CORS --------------------------------------------------------------------
