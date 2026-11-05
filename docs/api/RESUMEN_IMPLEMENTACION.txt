@@ -1,0 +1,698 @@
+==============================================================================
+RESUMEN DE IMPLEMENTACION - DOMIPEDIDOSX BACKEND
+==============================================================================
+
+Proyecto: DomiPedidosX Backend
+Stack: Django 6.1 + Django REST Framework
+Autenticacion: JWT con djangorestframework-simplejwt 5.5.1
+Usuario personalizado: apps.usuarios.User (AUTH_USER_MODEL = "usuarios.User")
+PK: UUID
+Login: email
+Roles: cliente / operador / cocina / repartidor / admin
+
+Referencia de implementacion:
+- Rama: feature/features-sprint1-backend
+- Commit: b68b9d1
+- Esta rama de documentacion no incorpora codigo funcional; este documento
+  describe la implementacion de referencia y debe mantenerse sincronizado con
+  ella cuando se integre.
+
+Alcance del Sprint 1:
+- HU 1: registro publico de clientes.
+- HU 2: autenticacion JWT, refresh y consulta del usuario autenticado.
+- HU 3: permisos reutilizables por rol.
+- HU 4: registro de personal del restaurante por parte del administrador.
+- HU 5: recuperacion de contrasena por correo.
+- HU 6: actualizacion del perfil propio.
+- HU 7: gestion de sedes y horarios de atencion.
+
+Decisiones transversales:
+- Vistas delgadas: views.py solo orquesta, valida entrada, autoriza y responde.
+- Logica de negocio en services.py.
+- Validacion de entrada en serializers.py.
+- Permisos reutilizables en apps/core/permissions.py.
+- Respuestas y mensajes en espanol.
+- Operaciones que escriben varias tablas usan transaction.atomic().
+- No se modificaron modelos ni se crearon migraciones para el Sprint 1.
+- No se agregaron dependencias distintas a djangorestframework-simplejwt
+  (ya existente, ahora con version fija en requirements/base.txt).
+
+==============================================================================
+1. VISION GENERAL Y ARQUITECTURA
+==============================================================================
+
+1.1 Estructura relevante
+
+backend/
+  config/
+    settings.py          Configuracion de Django, DRF, JWT, correo y validadores.
+    urls.py              Montaje de admin y prefijos /api/auth, /api/usuarios
+                         y /api/sedes.
+  apps/
+    core/
+      models.py          Timestamped, ModeloUUID, DiaSemana, ConfiguracionGlobal.
+      permissions.py     Fabrica RolPermitido y permisos concretos por rol.
+      tests.py           Matriz de acceso por rol y pruebas de permisos.
+    usuarios/
+      models.py          User, Rol, UsuarioManager, Direccion,
+                         PerfilRepartidor.
+      services.py        Reglas de negocio de registro, personal, reset y
+                         perfil.
+      serializers.py     Validacion de entrada y representacion de usuarios.
+      views.py           Endpoints delgados de autenticacion y usuarios.
+      urls.py            Rutas de registro, me, personal y password reset.
+      auth_urls.py       Rutas de login y refresh JWT.
+      tests.py           Pruebas de HU 1 a HU 6.
+    sedes/
+      models.py          Sede, SedeUsuario, HorarioAtencion, Feriado.
+      services.py        Validacion de horarios, creacion, edicion y borrado
+                         logico.
+      serializers.py     Serializers de sede y horarios.
+      views.py           Listado/creacion y detalle/edicion/desactivacion.
+      urls.py            Rutas de sedes.
+      tests.py           Pruebas de HU 7.
+
+1.2 Flujo de una peticion HTTP
+
+  1. Django resuelve la URL en config/urls.py y delega en el modulo de la app.
+  2. DRF aplica autenticacion JWT por defecto e IsAuthenticated por defecto.
+     Los endpoints publicos declaran AllowAny de forma explicita.
+  3. La vista valida la entrada con un serializer y llama a un servicio.
+  4. El servicio aplica reglas de negocio y persiste dentro de una transaccion.
+  5. La vista devuelve una respuesta con el serializer de salida y el status
+     HTTP correspondiente.
+
+La separacion evita duplicar reglas en las vistas y permite probar la logica
+de negocio sin depender de la capa HTTP.
+
+1.3 Configuracion base
+
+- settings.py lee variables desde backend/.env con django-environ.
+- SECRET_KEY es obligatoria; DEBUG y ALLOWED_HOSTS se leen del entorno.
+- DATABASES usa DATABASE_URL; si no existe, SQLite local.
+- INSTALLED_APPS incluye core, usuarios, sedes, menu, inventario, cobertura,
+  pedidos, repartos, promociones, notificaciones y reportes.
+- AUTH_USER_MODEL = "usuarios.User" debe declararse antes de la primera
+  migracion.
+- REST_FRAMEWORK:
+    DEFAULT_AUTHENTICATION_CLASSES = JWTAuthentication
+    DEFAULT_PERMISSION_CLASSES = IsAuthenticated
+- SIMPLE_JWT:
+    ACCESS_TOKEN_LIFETIME = 15 minutos
+    REFRESH_TOKEN_LIFETIME = 7 dias
+    AUTH_HEADER_TYPES = ("Bearer",)
+    USER_ID_FIELD = "id" (UUID convertido a str en el claim)
+    USER_ID_CLAIM = "user_id"
+- MAILERS usa console.EmailBackend en desarrollo. En pruebas se usa el backend
+  locmem de Django, por lo que django.core.mail.outbox recibe los correos.
+- AUTH_PASSWORD_VALIDATORS activa similitud con atributos, longitud minima,
+  contrasenas comunes y contrasenas numericas.
+- LANGUAGE_CODE = "es-co"; TIME_ZONE = "America/Bogota"; USE_TZ = True.
+
+1.4 Mapa de endpoints
+
+  Metodo  Ruta                                  Permiso             Proposito
+  ------  ------------------------------------  ------------------  ------------------------------
+  POST    /api/usuarios/registro/               AllowAny            Registrar cliente.
+  POST    /api/auth/login/                      AllowAny            Obtener access y refresh.
+  POST    /api/auth/refresh/                    AllowAny            Renovar access con refresh.
+  GET     /api/usuarios/me/                     IsAuthenticated     Consultar perfil propio.
+  PATCH   /api/usuarios/me/                     IsAuthenticated     Actualizar perfil propio.
+  POST    /api/usuarios/personal/               EsAdmin             Crear personal.
+  POST    /api/usuarios/password-reset/         AllowAny            Solicitar recuperacion.
+  POST    /api/usuarios/password-reset/confirmar/ AllowAny          Confirmar nueva clave.
+  GET     /api/sedes/                           AllowAny            Listar sedes activas.
+  POST    /api/sedes/                           EsAdmin             Crear sede.
+  GET     /api/sedes/<uuid:pk>/                 AllowAny            Ver sede activa.
+  PUT     /api/sedes/<uuid:pk>/                 EsAdmin             Reemplazar sede.
+  PATCH   /api/sedes/<uuid:pk>/                 EsAdmin             Editar sede.
+  DELETE  /api/sedes/<uuid:pk>/                 EsAdmin             Desactivar sede.
+
+Notas de rutas:
+- auth_urls.py monta login y refresh bajo /api/auth/.
+- urls.py de usuarios monta registro, me, personal y password reset bajo
+  /api/usuarios/.
+- urls.py de sedes monta la lista en "" y el detalle en "<uuid:pk>/".
+- El detalle de sede usa <uuid:pk>; un identificador con formato invalido no
+  coincide con la ruta y Django responde 404 antes de llegar a la vista.
+
+1.5 Modelo de datos usado por el Sprint 1
+
+User:
+- Hereda de AbstractBaseUser, PermissionsMixin y ModeloUUID.
+- Campos principales: nombre, apellido, email unico, telefono, rol, is_active,
+  is_staff.
+- USERNAME_FIELD = "email"; REQUIRED_FIELDS = nombre, apellido, telefono.
+- UsuarioManager.create_user asigna rol cliente, is_staff=False e
+  is_superuser=False por defecto.
+- UsuarioManager.create_superuser asigna rol admin, is_staff=True e
+  is_superuser=True.
+- normalize_email y save convierten el email a minusculas.
+- is_active=False desactiva al usuario sin borrar el registro.
+
+Rol:
+- cliente, operador, cocina, repartidor, admin.
+
+PerfilRepartidor:
+- OneToOne con User mediante usuario_id.
+- disponible=False por defecto.
+- latitud, longitud y ubicacion_actualizada_en son opcionales.
+
+Sede:
+- nombre, direccion, telefono, latitud, longitud, activa.
+- activa=False representa borrado logico.
+
+SedeUsuario:
+- Relacion entre User y Sede para personal asignado.
+- Restriccion unica (usuario, sede).
+
+HorarioAtencion:
+- sede, dia_semana (1 a 7), hora_apertura, hora_cierre.
+- Indice por (sede, dia_semana).
+- Restricciones de BD: dia entre 1 y 7; cierre mayor que apertura.
+
+==============================================================================
+2. AUTENTICACION JWT Y PERMISOS POR ROL
+==============================================================================
+
+2.1 Login
+
+Endpoint: POST /api/auth/login/
+Permiso: AllowAny
+Implementacion: LoginView + LoginSerializer.
+
+Flujo:
+  1. Recibe email y password.
+  2. LoginSerializer normaliza el email con strip().lower() usando el
+     username_field del serializer.
+  3. TokenObtainPairSerializer valida las credenciales contra el backend de
+     autenticacion de Django.
+  4. Si el correo no existe, la contrasena es incorrecta o el usuario esta
+     inactivo, responde 401 con el mensaje generico:
+     "Correo o contrasena incorrectos."
+  5. Si es valido, responde 200 con {"access", "refresh"}.
+  6. get_token agrega el claim informativo "rol".
+
+El claim "rol" sirve para que el cliente sepa que interfaz mostrar. No debe
+usarse para autorizar: los permisos consultan siempre el usuario de la base de
+datos.
+
+2.2 Refresh
+
+Endpoint: POST /api/auth/refresh/
+Permiso: AllowAny
+Implementacion: TokenRefreshView de simplejwt.
+
+Flujo:
+- Recibe {"refresh": "<token>"}.
+- Devuelve un nuevo access si el refresh es valido.
+- Un refresh invalido o expirado responde 401.
+
+2.3 Usuario autenticado
+
+Endpoint: GET /api/usuarios/me/
+Permiso: IsAuthenticated
+
+Respuesta 200:
+- id, nombre, apellido, email, telefono, rol.
+
+Errores:
+- Sin token, token alterado o token invalido: 401.
+- Un token emitido para un usuario que luego fue desactivado no permite el
+  acceso: JWTAuthentication rechaza al usuario inactivo con 401.
+
+2.4 Fabrica de permisos
+
+Archivo: apps/core/permissions.py
+
+_RolPermitidoBase.has_permission:
+  1. Obtiene request.user.
+  2. Exige usuario autenticado.
+  3. Exige usuario.is_active.
+  4. Exige que usuario.rol pertenezca al conjunto roles.
+
+RolPermitido(*roles) crea dinamicamente una clase de permiso con ese conjunto.
+Permisos concretos:
+- EsCliente
+- EsOperador
+- EsCocina
+- EsRepartidor
+- EsAdmin
+
+Se pueden combinar con el operador | de DRF, por ejemplo:
+  permission_classes = [EsCocina | EsOperador]
+
+2.5 Matriz de acceso
+
+  Recurso / endpoint                    Roles permitidos
+  ------------------------------------  --------------------------------
+  Registro de cliente                   Publico (AllowAny)
+  Login y refresh                       Publico (AllowAny)
+  Me                                    Cualquier autenticado y activo
+  Registro de personal                  Admin
+  Password reset (solicitar/confirmar)  Publico (AllowAny)
+  Listar y ver sedes activas            Publico (AllowAny)
+  Crear, editar y desactivar sedes      Admin
+
+Reglas importantes:
+- El admin no tiene acceso implicito a todos los endpoints. Cada vista declara
+  sus roles y debe incluir EsAdmin cuando corresponda.
+- Un usuario autenticado con rol no permitido recibe 403.
+- Un usuario sin token o con token invalido recibe 401.
+- Un usuario inactivo no pasa la autenticacion ni el permiso.
+- El cambio de rol en base de datos aplica de inmediato aunque el token
+  anterior conserve el claim "rol" viejo.
+
+==============================================================================
+3. DETALLE POR HISTORIA DE USUARIO
+==============================================================================
+
+3.1 HU 1 - Registro de cliente
+
+Endpoint: POST /api/usuarios/registro/
+Permiso: AllowAny
+Componentes: RegistroClienteView, RegistroClienteSerializer, registrar_cliente.
+
+Entrada:
+- email, nombre, apellido, telefono, password, password_confirmacion.
+
+Flujo:
+  1. El serializer valida email, campos obligatorios y longitudes.
+  2. validate_email normaliza el email y verifica unicidad sin distinguir
+     mayusculas con email__iexact.
+  3. validate compara password con password_confirmacion. Si no coinciden,
+     devuelve 400 con error en "password".
+  4. password_validation.validate_password aplica los validadores de Django.
+  5. registrar_cliente crea el usuario dentro de transaction.atomic con
+     rol=Rol.CLIENTE.
+  6. La vista responde 201 con mensaje, id y email. No devuelve tokens.
+
+Seguridad:
+- rol, is_staff, is_active e is_superuser no estan en fields del serializer.
+  Si el cliente los envia, DRF los ignora.
+- El usuario creado siempre queda cliente, activo, sin staff y sin superuser.
+- El email se guarda normalizado.
+
+Respuestas:
+- 201: usuario creado.
+- 400: email duplicado, contrasenas distintas, contrasena debil o campos
+  invalidos.
+
+3.2 HU 2 - Autenticacion JWT
+
+Endpoints: POST /api/auth/login/, POST /api/auth/refresh/,
+GET /api/usuarios/me/.
+Componentes: LoginView, LoginSerializer, TokenRefreshView, MeView,
+UsuarioSerializer.
+
+Ver seccion 2 para el flujo completo.
+
+Respuestas:
+- Login valido: 200 con access y refresh.
+- Login invalido o usuario inactivo: 401 con mensaje generico.
+- Refresh valido: 200 con access.
+- Refresh invalido: 401.
+- Me sin token o con token invalido: 401.
+- Me con token valido: 200 con datos del usuario.
+
+3.3 HU 3 - Permisos por rol
+
+Componentes: apps/core/permissions.py y permisos concretos.
+
+Objetivo:
+- Centralizar la autorizacion por rol.
+- Evitar repetir condiciones en cada vista.
+- Garantizar que la decision se tome con el rol actual en base de datos.
+
+La implementacion y la matriz se detallan en la seccion 2.
+
+3.4 HU 4 - Registro de personal
+
+Endpoint: POST /api/usuarios/personal/
+Permiso: EsAdmin
+Componentes: RegistroPersonalView, RegistroPersonalSerializer,
+PersonalSerializer, crear_usuario_personal.
+
+Roles permitidos para crear (ROLES_PERSONAL):
+- operador
+- cocina
+- repartidor
+- admin
+
+Roles operativos (ROLES_OPERATIVOS):
+- operador
+- cocina
+- repartidor
+
+Entrada:
+- email, nombre, apellido, telefono, rol, sedes_ids, password,
+  password_confirmacion.
+
+Validaciones del serializer:
+- rol debe pertenecer a ROLES_PERSONAL. No se puede crear cliente desde este
+  endpoint.
+- email se normaliza y se valida como unico sin distinguir mayusculas.
+- password y password_confirmacion deben coincidir.
+- password se valida con los validadores de Django.
+- sedes_ids se deduplica con dict.fromkeys.
+- Para roles operativos, sedes_ids debe tener al menos una sede.
+- Si se envian sedes, todas deben existir y estar activas.
+- Si falta sedes_ids en un rol operativo, responde 400 con error en
+  "sedes_ids".
+
+Flujo del servicio crear_usuario_personal:
+  1. Abre transaction.atomic.
+  2. Verifica que el rol sea de personal.
+  3. Verifica que los roles operativos tengan sedes.
+  4. Consulta las sedes activas por id.
+  5. Compara la cantidad de sedes encontradas con los ids unicos enviados.
+  6. Crea el usuario con create_user.
+  7. Asigna is_staff=True solo cuando el rol es admin.
+  8. Crea los registros SedeUsuario con bulk_create.
+  9. Si el rol es repartidor, crea PerfilRepartidor con disponible=False.
+
+Respuesta 201:
+- mensaje.
+- usuario: PersonalSerializer con id, nombre, apellido, email, telefono, rol y
+  sedes (id y nombre).
+
+Casos especiales:
+- Admin puede crearse sin sedes y queda con is_staff=True.
+- Admin no recibe PerfilRepartidor.
+- Repartidor recibe perfil automaticamente.
+- Un cliente no puede usar el endpoint: 403.
+- Sin token: 401.
+- Sede inexistente o inactiva: 400.
+- Email duplicado: 400.
+
+3.5 HU 5 - Recuperacion de contrasena
+
+Endpoints:
+- POST /api/usuarios/password-reset/
+- POST /api/usuarios/password-reset/confirmar/
+Permiso: AllowAny
+Componentes: SolicitarPasswordResetView, ConfirmarPasswordResetView,
+SolicitarPasswordResetSerializer, ConfirmarPasswordResetSerializer,
+solicitar_recuperacion_password, confirmar_recuperacion_password.
+
+Solicitud:
+  1. Recibe email y lo normaliza con strip().lower().
+  2. Busca el usuario con email__iexact.
+  3. Si no existe, retorna sin hacer nada. La vista responde siempre 200 con el
+     mismo mensaje para no revelar si el correo esta registrado.
+  4. Si existe, genera uidb64 con urlsafe_base64_encode(force_bytes(pk)).
+  5. Genera token con default_token_generator.make_token(usuario).
+  6. Envia correo con asunto "Recuperacion de contrasena - DomiPedidosX" y un
+     cuerpo que incluye "uid: <uidb64>" y "token: <token>".
+  7. send_mail usa fail_silently=False.
+
+Confirmacion:
+  1. Recibe uidb64, token y new_password.
+  2. Decodifica uidb64 y busca el usuario.
+  3. Valida el token con default_token_generator.check_token.
+  4. Valida new_password con password_validation.validate_password.
+  5. Guarda la nueva contrasena con set_password y save(update_fields).
+  6. Responde 200 con mensaje de exito.
+
+Errores:
+- uid invalido, token alterado, token expirado o usuario inexistente: 400 con
+  detail "El enlace de recuperacion es invalido o expiro."
+- contrasena debil: 400 con errores en "new_password".
+- correo inexistente en la solicitud: 200 con el mismo mensaje, sin enviar
+  correo.
+
+La vigencia del token la define PASSWORD_RESET_TIMEOUT de Django; el proyecto
+no la personaliza en settings. Las pruebas la sobrescriben para validar el caso
+expirado.
+
+3.6 HU 6 - Actualizacion del perfil propio
+
+Endpoint: PATCH /api/usuarios/me/
+Permiso: IsAuthenticated
+Componentes: MeView.patch, ActualizarPerfilSerializer,
+actualizar_perfil_usuario.
+
+Comportamiento:
+- partial=True: solo se actualizan los campos enviados.
+- Campos permitidos: nombre, apellido, telefono.
+- email, rol e is_staff no estan en fields del serializer y se ignoran si se
+  envian.
+- El servicio solo asigna los campos que llegan con valor distinto de None y
+  usa save(update_fields=...).
+- Responde 200 con el UsuarioSerializer actualizado.
+- Sin token: 401.
+
+3.7 HU 7 - Gestion de sedes y horarios
+
+Endpoints:
+- GET /api/sedes/
+- POST /api/sedes/
+- GET /api/sedes/<uuid:pk>/
+- PUT /api/sedes/<uuid:pk>/
+- PATCH /api/sedes/<uuid:pk>/
+- DELETE /api/sedes/<uuid:pk>/
+
+Componentes: SedeListCreateView, SedeDetailView, SedeSerializer,
+HorarioAtencionSerializer, crear_sede, actualizar_sede, desactivar_sede,
+validar_horarios.
+
+Lectura publica:
+- GET /api/sedes/ lista solo sedes activas, ordenadas por nombre.
+- GET /api/sedes/<pk>/ devuelve una sede activa.
+- Una sede inactiva responde 404 para usuarios no admin.
+- Un admin autenticado puede consultar una sede inactiva por detalle.
+- Un admin autenticado puede listar inactivas con
+  ?incluir_inactivas=true. Tambien se aceptan 1, si y si con tilde, sin
+  distinguir mayusculas.
+- Un cliente u otro rol autenticado no puede incluir inactivas aunque envie el
+  parametro: la lista sigue mostrando solo activas.
+
+Escritura:
+- POST, PUT, PATCH y DELETE requieren EsAdmin.
+- Sin token: 401.
+- Con token de rol no admin: 403.
+
+Creacion:
+- Entrada: nombre, direccion, telefono, latitud, longitud, horarios.
+- horarios es opcional.
+- SedeSerializer valida horarios con validar_horarios.
+- crear_sede valida antes de abrir la transaccion, crea la sede y usa
+  bulk_create para los horarios dentro de transaction.atomic.
+- Respuesta 201 con la sede y sus horarios.
+
+Edicion:
+- PUT usa partial=False; PATCH usa partial=True.
+- Si no se envia horarios, se conservan los actuales.
+- Si se envia horarios, se validan y luego se reemplazan por completo dentro de
+  una transaccion.
+- Si la validacion falla, no se modifica ni la sede ni los horarios. La vista
+  responde 400.
+- Respuesta 200 con la sede actualizada.
+
+Desactivacion:
+- DELETE no borra la fila.
+- desactivar_sede asigna activa=False con save(update_fields=["activa"]).
+- Respuesta 200 con mensaje "Sede desactivada correctamente."
+
+Validacion de horarios:
+- dia_semana debe ser un entero entre 1 y 7.
+- hora_apertura y hora_cierre son obligatorias.
+- hora_cierre debe ser estrictamente mayor que hora_apertura.
+- Los tramos de un mismo dia se ordenan por apertura y no pueden traslaparse.
+- HorarioAtencionSerializer valida cierre mayor que apertura a nivel de cada
+  horario.
+- SedeSerializer.validate_horarios valida el conjunto completo.
+- El servicio vuelve a validar antes de persistir.
+- La base de datos refuerza las reglas con CheckConstraint.
+
+Respuestas de sedes:
+- 200: listado, detalle, edicion o desactivacion correcta.
+- 201: sede creada.
+- 400: horarios invalidos o datos invalidos.
+- 401: escritura sin token.
+- 403: escritura con rol no admin.
+- 404: sede inexistente o inactiva para usuario no admin.
+
+==============================================================================
+4. BUENAS PRACTICAS Y CHECKLIST PARA NUEVOS ENDPOINTS
+==============================================================================
+
+4.1 Organizacion del codigo
+
+- La vista no debe contener reglas de negocio complejas.
+- El serializer valida forma, tipos, obligatoriedad y reglas de entrada.
+- El servicio implementa reglas de negocio y persistencia.
+- Los permisos se declaran en la vista y se reutilizan desde core.permissions.
+- Los mensajes de error deben ser claros, en espanol y sin filtrar informacion
+  sensible.
+
+4.2 Seguridad
+
+- No confiar en el claim "rol" del JWT para autorizar.
+- Consultar siempre request.user.rol, cargado desde la base de datos.
+- Exigir is_active en autenticacion y permisos.
+- Declarar AllowAny solo en endpoints publicos deliberados.
+- No exponer campos sensibles en serializers de entrada.
+- No permitir que el cliente asigne rol, is_staff, is_active o is_superuser.
+- Usar mensajes genericos en login y recuperacion para evitar enumeracion de
+  correos.
+- No registrar contrasenas ni tokens en logs.
+- Guardar contrasenas solo mediante set_password o create_user.
+- Validar que las sedes asignadas existan y esten activas.
+- Aplicar borrado logico cuando el dominio lo requiera.
+
+4.3 Consistencia de datos
+
+- Usar transaction.atomic cuando se escriben varias tablas.
+- Validar antes de borrar o reemplazar datos existentes.
+- Usar update_fields en guardados parciales.
+- Evitar duplicados con restricciones de base de datos y validaciones.
+- Usar bulk_create para inserciones masivas controladas.
+- Mantener relaciones explicitas y related_name descriptivos.
+
+4.4 Rendimiento
+
+- Usar prefetch_related para horarios y sedes cuando se serializan listas.
+- Usar select_related en relaciones ForeignKey y OneToOne cuando se recorren.
+- Evitar consultas dentro de bucles.
+- Mantener indices en campos de filtro y busqueda.
+- No serializar listas completas si el endpoint solo necesita un resumen.
+
+4.5 Respuestas HTTP
+
+- 200: consulta o actualizacion exitosa.
+- 201: recurso creado.
+- 400: error de validacion o regla de negocio.
+- 401: falta autenticacion o token invalido.
+- 403: autenticado sin rol permitido.
+- 404: recurso inexistente o no visible para el usuario.
+
+4.6 Checklist para un endpoint nuevo
+
+  [ ] Definir ruta y nombre en urls.py.
+  [ ] Elegir permiso explicito; no asumir acceso del admin.
+  [ ] Crear serializer de entrada con campos permitidos.
+  [ ] Validar unicidad y reglas de negocio en el serializer o servicio.
+  [ ] Implementar logica en services.py si hay mas de una escritura o regla.
+  [ ] Usar transaction.atomic cuando corresponda.
+  [ ] Devolver serializer de salida, nunca el modelo crudo.
+  [ ] Definir status HTTP para exito y errores.
+  [ ] Agregar pruebas de exito, validacion, permisos y estados 401/403.
+  [ ] Verificar que no se filtren campos sensibles.
+  [ ] Verificar consultas y relaciones para evitar N+1.
+  [ ] Ejecutar la suite completa antes de integrar.
+
+==============================================================================
+5. SUITE DE PRUEBAS Y CASOS CRITICOS
+==============================================================================
+
+5.1 Resultado
+
+Comando:
+  python -m pytest -q
+
+Resultado de referencia:
+  56 passed, 16 subtests passed
+
+Distribucion:
+- apps/usuarios/tests.py: 35 pruebas.
+- apps/core/tests.py: 6 pruebas.
+- apps/sedes/tests.py: 15 pruebas y 16 subtests.
+
+Las pruebas usan APITestCase, reverse, JWT reales generados con
+LoginSerializer.get_token y django.core.mail.outbox para correo.
+
+5.2 Cobertura por archivo
+
+apps/usuarios/tests.py
+- RegistroClienteTests (5):
+  registro exitoso, email duplicado sin distinguir mayusculas, contrasenas
+  distintas, contrasena debil, campos sensibles ignorados.
+- LoginTests (5):
+  login exitoso con claim de rol, contrasena incorrecta, email inexistente con
+  el mismo mensaje, usuario inactivo, email con mayusculas.
+- RefreshTests (2):
+  refresh exitoso, refresh invalido.
+- MeTests (3):
+  sin token, token valido, token alterado.
+- RegistroPersonalTests (9):
+  creacion de operador, cocina y repartidor con sedes; perfil automatico de
+  repartidor; admin sin sedes; operativo sin sedes; sede inexistente o
+  inactiva; cliente sin permiso; sin token; no crear clientes; email
+  duplicado.
+- PasswordResetTests (7):
+  solicitud con correo existente, solicitud con correo inexistente sin revelar
+  ni enviar, confirmacion exitosa, token alterado, token expirado, contrasena
+  debil, uid invalido.
+- ActualizarPerfilTests (4):
+  actualizacion completa permitida, actualizacion parcial, ignorar email/rol/
+  is_staff, sin token.
+
+apps/core/tests.py
+- PermisosPorRolTests (6):
+  matriz completa de acceso por rol, sin token, usuario inactivo con token
+  emitido, permiso que rechaza inactivo, combinacion con OR, cambio de rol en
+  base de datos con token anterior.
+
+apps/sedes/tests.py
+- SedeGestionTests (15 metodos, 16 subtests):
+  creacion valida con horarios, cierre menor o igual a apertura, dia fuera de
+  rango, horarios traslapados, consulta publica solo activas, admin incluye
+  inactivas, cliente no puede incluir inactivas, detalle publico de sede
+  activa, detalle de inactiva solo para admin, edicion con reemplazo de
+  horarios, edicion sin horarios conserva actuales, edicion con traslape no
+  modifica nada, desactivacion sin borrar registro, 403 en escritura para
+  roles no admin, 401 en escritura sin token.
+
+5.3 Pruebas criticas de seguridad y consistencia
+
+Autenticacion:
+- Login con usuario inactivo responde 401.
+- Token invalido o alterado responde 401.
+- El claim de rol no cambia por si solo los permisos.
+- Un cambio de rol en base de datos aplica aunque el token conserve el claim
+  anterior.
+
+Autorizacion:
+- Sin token: 401.
+- Token valido con rol incorrecto: 403.
+- El admin no obtiene acceso implicito a endpoints que no lo incluyen.
+- Los permisos revisan is_active.
+
+Registro:
+- El cliente no puede autoasignarse rol admin, is_staff ni is_superuser.
+- El email duplicado se detecta sin distinguir mayusculas.
+- La contrasena se valida con los validadores de Django.
+
+Recuperacion:
+- Un correo inexistente no envia mensaje ni revela si existe.
+- Un token alterado, expirado o un uid invalido no cambia la contrasena.
+- Una contrasena debil no reemplaza la anterior.
+
+Personal:
+- Los roles operativos requieren al menos una sede activa.
+- Las sedes inexistentes o inactivas se rechazan.
+- El repartidor recibe PerfilRepartidor automaticamente.
+- El admin se crea con is_staff=True y sin perfil de repartidor.
+
+Sedes:
+- Los horarios no pueden traslaparse en el mismo dia.
+- La edicion con horarios invalidos no modifica nombre, datos ni horarios.
+- El borrado es logico: la fila sigue existiendo con activa=False.
+- Las sedes inactivas no se muestran publicamente.
+- El parametro incluir_inactivas solo tiene efecto para admin autenticado.
+
+5.4 Nota de ejecucion
+
+La suite requiere SECRET_KEY y las variables de backend/.env. En un worktree
+limpio o en CI se deben definir en el entorno antes de ejecutar pytest. La
+prueba de referencia se ejecuto con:
+
+  set -a
+  source backend/.env
+  set +a
+  python -m pytest -q
+
+==============================================================================
+FIN DEL RESUMEN
+==============================================================================
