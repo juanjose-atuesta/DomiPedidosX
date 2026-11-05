@@ -6,6 +6,9 @@ import FormularioSede from "./pages/admin/FormularioSede"
 import Categorias from "./pages/operador/Categorias"
 import Productos from "./pages/operador/Productos"
 import FormularioProducto from "./pages/operador/FormularioProducto"
+import Promociones from "./pages/operador/Promociones"
+import FormularioPromocion from "./pages/operador/FormularioPromocion"
+import Inventario from "./pages/operador/Inventario"
 
 export default function App() {
   return (
@@ -20,6 +23,10 @@ export default function App() {
       <Route path="/operador/productos" element={<Productos />} />
       <Route path="/operador/productos/nuevo" element={<FormularioProducto />} />
       <Route path="/operador/productos/:id/editar" element={<FormularioProducto />} />
+      <Route path="/operador/promociones" element={<Promociones />} />
+      <Route path="/operador/promociones/nueva" element={<FormularioPromocion />} />
+      <Route path="/operador/promociones/:id/editar" element={<FormularioPromocion />} />
+      <Route path="/operador/inventario" element={<Inventario />} />
       <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
     </Routes>
   )
