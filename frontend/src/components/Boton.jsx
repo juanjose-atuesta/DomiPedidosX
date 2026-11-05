@@ -15,11 +15,16 @@ export default function Boton({
   tipo = "primario",
   anchoCompleto = false,
   grande = false,
+  pequeno = false,
   className = "",
   children,
   ...props
 }) {
-  const tamano = grande ? "h-14 rounded-full" : "h-11 rounded-lg"
+    const tamano = grande
+    ? "h-14 rounded-full"
+    : pequeno
+      ? "h-[30px] rounded-full"
+      : "h-11 rounded-lg"
 
   return (
     <button
