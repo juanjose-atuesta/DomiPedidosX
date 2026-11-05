@@ -110,6 +110,169 @@ HU 7 - Gestion de sedes (CRUD para administradores)
   traslapes de horarios el mismo dia.
 - Errores: 400 por datos/horarios invalidos, 401 sin token, 403 si no es admin.
 
+HU 8 - Catalogo del menu (categorias, productos y opciones)
+- GET    /api/menu/categorias/                 -> listar categorias activas (AllowAny).
+- POST   /api/menu/categorias/                 -> crear categoria (operador/admin).
+- GET    /api/menu/categorias/<uuid>/          -> detalle (AllowAny).
+- PUT    /api/menu/categorias/<uuid>/          -> reemplazar categoria (operador/admin).
+- PATCH  /api/menu/categorias/<uuid>/          -> editar categoria (operador/admin).
+- DELETE /api/menu/categorias/<uuid>/          -> desactivacion logica (operador/admin).
+- GET    /api/menu/productos/                  -> listar productos disponibles (AllowAny).
+- POST   /api/menu/productos/                  -> crear producto (operador/admin).
+- GET    /api/menu/productos/<uuid>/           -> detalle (AllowAny).
+- PUT    /api/menu/productos/<uuid>/           -> reemplazar producto (operador/admin).
+- PATCH  /api/menu/productos/<uuid>/           -> editar producto (operador/admin).
+- DELETE /api/menu/productos/<uuid>/           -> borrado logico disponible=False (operador/admin).
+- GET    /api/menu/productos/<uuid>/opciones/  -> listar grupos y opciones (AllowAny).
+- POST   /api/menu/productos/<uuid>/opciones/  -> crear/actualizar grupo con opciones anidadas (operador/admin).
+- El publico y los clientes solo ven categorias activa=True y productos
+  disponible=True; los gestores pueden consultar los inactivos/no disponibles.
+- DELETE de categoria y producto no borra fisicamente; responde 200 con mensaje.
+- Validaciones: precio_base >= 0, tiempo_preparacion_min > 0,
+  max_selecciones >= 1 y tipo de grupo entre tamano/adicion/excluible.
+- Errores: 400 por datos invalidos, 401 sin token, 403 si el rol no es
+  operador ni admin, 404 si el recurso no existe o esta oculto.
+
+Cambios realizados en el modulo de menu (HU 8):
+- services.py: crear_categoria, actualizar_categoria, crear_producto,
+  actualizar_producto, desactivar_producto y configurar_grupo_opciones, con
+  transacciones atomicas y normalizacion de opciones anidadas.
+- serializers.py: CategoriaSerializer, ProductoSerializer,
+  GrupoOpcionSerializer y OpcionProductoSerializer.
+- views.py: CategoriaListCreateView, CategoriaDetailView,
+  ProductoListCreateView, ProductoDetailView y ProductoOpcionesView con
+  permisos por metodo (AllowAny para lectura, operador/admin para escritura).
+- urls.py: rutas de categorias, productos y opciones por UUID.
+- config/urls.py: montaje de api/menu/.
+- tests.py: 15 pruebas APITestCase (23 subtests) del modulo de menu.
+
+HU 9 - Combos y promociones
+- GET    /api/menu/combos/                  -> listar combos disponibles (AllowAny).
+- POST   /api/menu/combos/                  -> crear combo (operador/admin).
+- GET    /api/menu/combos/<uuid>/           -> detalle del combo (AllowAny).
+- PUT    /api/menu/combos/<uuid>/           -> reemplazar combo (operador/admin).
+- PATCH  /api/menu/combos/<uuid>/           -> editar combo (operador/admin).
+- DELETE /api/menu/combos/<uuid>/           -> borrado logico disponible=False (operador/admin).
+- GET    /api/promociones/                  -> listar promociones activas y vigentes (AllowAny).
+- POST   /api/promociones/                  -> crear promocion (operador/admin).
+- GET    /api/promociones/<uuid>/           -> detalle de promocion (AllowAny).
+- PUT    /api/promociones/<uuid>/           -> reemplazar promocion (operador/admin).
+- PATCH  /api/promociones/<uuid>/           -> editar promocion (operador/admin).
+- DELETE /api/promociones/<uuid>/           -> desactivacion logica activa=False (operador/admin).
+- Un combo es un Producto con es_combo=True y sus componentes se envian en
+  items_combo: [{"producto_id": "<uuid>", "cantidad": 2}, ...].
+- Se valida que el combo tenga al menos un producto, cantidades > 0, productos
+  existentes, sin productos repetidos, sin autoinclusion y sin ciclos.
+- Las promociones exigen exactamente un descuento: porcentaje (0 < x <= 100)
+  o monto (> 0), nunca ambos ni ninguno.
+- cupo_maximo_diario es OBLIGATORIO en serializador, servicio y endpoints; si
+  falta o no es mayor que cero, responde 400.
+- fecha_fin debe ser mayor o igual a fecha_inicio; sede y codigo son opcionales
+  (sede NULL aplica a todas las sedes y codigo vacio se guarda como NULL).
+- Los productos aplicables se envian en productos_ids; sin productos la
+  promocion aplica a todo el pedido.
+- La consulta publica solo muestra promociones activa=True y con la fecha
+  actual dentro de la vigencia; los gestores pueden consultar inactivas o
+  vencidas.
+- Errores: 400 por datos invalidos o duplicados, 401 sin token, 403 si el rol
+  no es operador ni admin, 404 si el recurso no existe o esta oculto.
+
+Cambios realizados en la HU 9:
+- apps/menu/services.py: crear_combo, actualizar_combo y desactivar_combo, con
+  normalizacion de items_combo, transacciones atomicas y validacion de ciclos.
+- apps/menu/serializers.py: ItemComboSerializer y ComboSerializer.
+- apps/menu/views.py: ComboListCreateView y ComboDetailView con permisos por
+  metodo (AllowAny para lectura, operador/admin para escritura).
+- apps/menu/urls.py: rutas combos/ y combos/<uuid>/.
+- apps/promociones/services.py: crear_promocion, actualizar_promocion y
+  desactivar_promocion, con validacion de descuento, fechas, cupo, sede,
+  codigo unico y productos aplicables.
+- apps/promociones/serializers.py: PromocionSerializer y
+  PromocionProductoSerializer.
+- apps/promociones/views.py: PromocionListCreateView y PromocionDetailView con
+  permisos por metodo y consulta publica de promociones activas/vigentes.
+- apps/promociones/urls.py: rutas de lista/creacion y detalle por UUID.
+- config/urls.py: montaje de api/promociones/.
+- tests.py: 10 pruebas de combos en menu y 13 pruebas de promociones.
+
+HU 10 - Inventario por sede y catalogo publico
+- GET    /api/inventario/sedes/<uuid:sede_id>/ -> listar inventario de la sede (operador/admin).
+- POST   /api/inventario/sedes/<uuid:sede_id>/ -> crear o actualizar inventario (operador/admin).
+- PUT    /api/inventario/sedes/<uuid:sede_id>/ -> actualizar inventario por producto_id (operador/admin).
+- PATCH  /api/inventario/sedes/<uuid:sede_id>/ -> actualizar campos del inventario (operador/admin).
+- DELETE /api/inventario/sedes/<uuid:sede_id>/ -> eliminar inventario de un producto (operador/admin).
+- GET    /api/menu/sedes/<uuid:sede_id>/catalogo/ -> catalogo publico por sede (AllowAny).
+- InventarioSede expone producto_id, producto_nombre, disponible_en_sede,
+  controla_stock, stock_actual, stock_minimo, agotado y stock_bajo.
+- POST hace upsert por (sede, producto): responde 201 al crear y 200 al
+  actualizar; PUT/PATCH requieren producto_id en el cuerpo.
+- Se valida que la sede exista y este activa, que el producto exista y este
+  disponible, y que stock_actual/stock_minimo sean enteros no negativos.
+- Si controla_stock=True y stock_actual <= stock_minimo, se crea una
+  Notificacion de tipo alerta_stock_bajo, canal sistema, asociada a la sede.
+- El catalogo publico solo devuelve productos con disponible_en_sede=True y
+  Producto.disponible=True de una sede activa; agrega el flag agotado calculado
+  por InventarioSede (stock_actual <= 0 y controla_stock=True).
+- Errores: 400 por datos invalidos o sede/producto no habilitados, 401 sin
+  token, 403 para roles distintos de operador/admin y 404 para sede o
+  inventario inexistente.
+
+Cambios realizados en la HU 10:
+- apps/notificaciones/services.py: crear_alerta_stock_bajo, que registra la
+  Notificacion asociada a la sede con el detalle del producto y las unidades.
+- apps/inventario/services.py: asignar_o_actualizar_inventario_sede y
+  cambiar_disponibilidad_producto_sede, con transacciones atomicas,
+  validaciones y disparo automatico de la alerta de stock bajo.
+- apps/inventario/serializers.py: InventarioSedeSerializer con campos de
+  lectura agotado/stock_bajo y producto_id de escritura.
+- apps/inventario/views.py: InventarioSedeView con GET/POST/PUT/PATCH/DELETE
+  protegida con EsOperador | EsAdmin.
+- apps/inventario/urls.py: ruta sedes/<uuid:sede_id>/.
+- apps/menu/serializers.py: ProductoCatalogoSedeSerializer con el flag agotado.
+- apps/menu/views.py: CatalogoSedeView publica, filtrada por inventario de sede.
+- apps/menu/urls.py: ruta sedes/<uuid:sede_id>/catalogo/.
+- config/urls.py: montaje de api/inventario/.
+- tests.py: 9 pruebas de inventario y 3 pruebas de catalogo por sede.
+
+HU 11 - Descuento automatico de inventario al confirmar pedidos
+- POST   /api/pedidos/ -> crear y confirmar pedido (cliente/operador/admin).
+- El cuerpo incluye sede_id, cliente_nombre, cliente_telefono, metodo_pago y
+  detalles: [{"producto_id": "<uuid>", "cantidad": 2, "notas_producto": "",
+  "opciones": ["<uuid>"]}, ...].
+- La creacion calcula precio_unitario, subtotal y total; registra Pedido,
+  DetallePedido, DetallePedidoOpcion e HistorialEstado en una transaccion.
+- descontar_stock_pedido recorre los detalles: los productos sencillos
+  descuentan su cantidad y los combos (es_combo=True) se descomponen con
+  ProductoCombo multiplicando la cantidad del pedido por la del componente.
+- Solo se descuenta inventario cuando existe InventarioSede para la sede y el
+  producto tiene controla_stock=True; las filas se bloquean con
+  select_for_update.
+- Si stock_actual < cantidad requerida se responde 400 con
+  "Stock insuficiente para el producto X en esta sede." y la transaccion
+  revierte el pedido, sus detalles y cualquier descuento previo.
+- Si tras el descuento stock_actual <= stock_minimo se crea una notificacion
+  alerta_stock_bajo mediante crear_alerta_stock_bajo.
+- Los pedidos usan tipo=recoger por defecto; si tipo=domicilio se exigen
+  direccion_entrega, entrega_lat y entrega_lng.
+- Errores: 400 por datos invalidos, stock insuficiente o descuento mayor al
+  total; 401 sin token y 403 para roles no autorizados.
+
+Cambios realizados en la HU 11:
+- apps/pedidos/services.py: crear_pedido y descontar_stock_pedido, con
+  transacciones atomicas, expansion de combos, bloqueo de inventario,
+  validacion de stock, descuento y alertas.
+- apps/pedidos/serializers.py: PedidoCreateSerializer con detalles y opciones,
+  PedidoSerializer y serializadores de detalle/opciones de salida.
+- apps/pedidos/views.py: PedidoListCreateView con POST y permisos
+  cliente/operador/admin.
+- apps/pedidos/urls.py: ruta de creacion/confirmacion de pedidos.
+- apps/inventario/services.py: reexportacion compatible de
+  descontar_stock_pedido.
+- config/urls.py: montaje de api/pedidos/.
+- apps/pedidos/tests.py: 6 pruebas de pedido simple, combo, stock
+  insuficiente con reversion, alerta de stock bajo, producto sin control de
+  stock y creacion por cliente.
+
 Cambios realizados en las HU 5 y 6:
 - services.py: solicitar_recuperacion_password, confirmar_recuperacion_password
   y actualizar_perfil_usuario.
@@ -133,7 +296,7 @@ Cambios realizados en el modulo de sedes (HU 7):
 
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    56 passed, 16 subtests passed
+    112 passed, 72 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).
@@ -141,9 +304,12 @@ Resultado de pruebas:
     .venv/bin/python manage.py makemigrations --check --dry-run
     No changes detected
 
-Las 56 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
+Las 112 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
 HU 4 (registro de personal), 7 de la HU 5 (recuperacion de contrasena),
-4 de la HU 6 (edicion de perfil) y 15 de la HU 7 (gestion de sedes).
+4 de la HU 6 (edicion de perfil), 15 de la HU 7 (gestion de sedes),
+25 de la HU 8/HU 9 de menu y combos (15 del catalogo base y 10 de combos),
+13 de promociones (HU 9), 12 de inventario y catalogo por sede (HU 10) y
+6 de descuento automatico de inventario en pedidos (HU 11).
 
 
 ==============================================================================
@@ -1786,6 +1952,131 @@ SedeGestionTests (15 pruebas, 16 subtests):
 - editar con horarios traslapados no modifica nada (400)
 - DELETE desactiva sin borrar el registro (activa=False)
 - cliente y repartidor reciben 403 en POST/PUT/PATCH/DELETE
+- sin token en escritura se recibe 401
+
+==============================================================================
+MODULO DE MENU (HU 8)
+==============================================================================
+
+ARCHIVO: apps/menu/services.py
+==============================================================================
+
+Finalidad:
+Concentrar la logica de categorias, productos y grupos de opciones. Las
+operaciones que modifican datos usan transaction.atomic(); la desactivacion de
+categorias/productos es logica y la configuracion de grupos reemplaza sus
+opciones cuando se envia la lista "opciones".
+
+Funciones principales:
+- crear_categoria(*, nombre, descripcion="", orden=0, activa=True)
+- actualizar_categoria(categoria_id, **datos)
+- crear_producto(*, categoria_id=None, nombre, descripcion="",
+  precio_base, imagen_url="", tiempo_preparacion_min, es_combo=False)
+- actualizar_producto(producto_id, **datos)
+- desactivar_producto(producto_id)
+- configurar_grupo_opciones(*, producto_id, nombre, tipo, obligatorio=False,
+  max_selecciones=1, opciones=None, orden=0)
+
+Reglas:
+- precio_base no puede ser negativo.
+- tiempo_preparacion_min y max_selecciones deben ser mayores que cero.
+- tipo debe pertenecer a TipoGrupoOpcion.values
+  (tamano, adicion, excluible).
+- categoria_id, cuando se envia, debe existir.
+- El grupo se identifica por (producto, nombre): si existe se actualiza; si no,
+  se crea.
+- Si "opciones" no es None, se eliminan las opciones actuales del grupo y se
+  crean las nuevas con bulk_create.
+- Cada opcion requiere nombre; precio_adicional >= 0 y orden entero.
+
+ARCHIVO: apps/menu/serializers.py
+==============================================================================
+
+- CategoriaSerializer: expone id, nombre, descripcion, orden y activa.
+- ProductoSerializer: expone categoria_id (source="categoria"), nombre,
+  descripcion, precio_base, imagen_url, tiempo_preparacion_min, es_combo,
+  disponible y grupos_opcion anidados de solo lectura.
+- GrupoOpcionSerializer: expone id, producto, nombre, tipo, obligatorio,
+  max_selecciones, orden y opciones anidadas.
+- OpcionProductoSerializer: expone id, nombre, precio_adicional, activa y
+  orden.
+- precio_base usa min_value=0; tiempo_preparacion_min y max_selecciones usan
+  min_value=1.
+
+ARCHIVO: apps/menu/views.py
+==============================================================================
+
+Vistas:
+- CategoriaListCreateView
+  * GET  /api/menu/categorias/       -> AllowAny; filtra activa=True.
+  * POST /api/menu/categorias/       -> operador/admin; crea categoria.
+- CategoriaDetailView
+  * GET    /api/menu/categorias/<uuid>/ -> AllowAny; inactiva solo gestores.
+  * PUT    /api/menu/categorias/<uuid>/ -> operador/admin.
+  * PATCH  /api/menu/categorias/<uuid>/ -> operador/admin.
+  * DELETE /api/menu/categorias/<uuid>/ -> operador/admin; activa=False.
+- ProductoListCreateView
+  * GET  /api/menu/productos/        -> AllowAny; filtra disponible=True.
+  * POST /api/menu/productos/        -> operador/admin; crea producto.
+- ProductoDetailView
+  * GET    /api/menu/productos/<uuid>/ -> AllowAny; no disponible solo gestores.
+  * PUT    /api/menu/productos/<uuid>/ -> operador/admin.
+  * PATCH  /api/menu/productos/<uuid>/ -> operador/admin.
+  * DELETE /api/menu/productos/<uuid>/ -> operador/admin; disponible=False.
+- ProductoOpcionesView
+  * GET  /api/menu/productos/<uuid>/opciones/ -> AllowAny; grupos y opciones.
+  * POST /api/menu/productos/<uuid>/opciones/ -> operador/admin; upsert de grupo.
+
+Permisos:
+- PERMISO_GESTION = EsOperador | EsAdmin.
+- Se instancia con PERMISO_GESTION() dentro de get_permissions() para que DRF
+  aplique correctamente el operador | de permisos.
+- Lectura publica con AllowAny; escritura exige token (401) y rol autorizado
+  (403).
+
+Respuestas representativas:
+- 201 al crear categoria, producto o grupo de opciones.
+- 200 al consultar, editar o desactivar.
+- 400 por precio/tiempo/max_selecciones/tipo invalidos.
+- 404 si el recurso no existe o esta oculto para el solicitante.
+
+ARCHIVO: apps/menu/urls.py
+==============================================================================
+
+path("categorias/", CategoriaListCreateView.as_view(),
+     name="categoria_list_create"),
+path("categorias/<uuid:pk>/", CategoriaDetailView.as_view(),
+     name="categoria_detail"),
+path("productos/", ProductoListCreateView.as_view(),
+     name="producto_list_create"),
+path("productos/<uuid:pk>/", ProductoDetailView.as_view(),
+     name="producto_detail"),
+path("productos/<uuid:pk>/opciones/", ProductoOpcionesView.as_view(),
+     name="producto_opciones"),
+
+ARCHIVO: config/urls.py
+==============================================================================
+
+path("api/menu/", include("apps.menu.urls")),
+
+ARCHIVO: apps/menu/tests.py
+==============================================================================
+
+MenuGestionTests (15 pruebas, 23 subtests):
+- admin y operador pueden crear categoria (201)
+- operador crea producto valido (201)
+- rechaza precio negativo y tiempo cero/negativo (400)
+- operador actualiza producto (200)
+- DELETE de producto hace borrado logico (200, disponible=False)
+- operador actualiza y desactiva categoria (200, activa=False)
+- crea grupos anidados tamano/adicion/excluible con sus opciones (201)
+- actualizar un grupo reemplaza sus opciones
+- consulta publica de opciones y detalle de producto
+- lista de categorias solo incluye activas
+- detalle de categoria inactiva solo visible para gestores
+- lista de productos solo incluye disponibles
+- detalle de producto no disponible solo visible para gestores
+- clientes y repartidores reciben 403 en escritura
 - sin token en escritura se recibe 401
 
 ==============================================================================
