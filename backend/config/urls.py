@@ -26,4 +26,6 @@ urlpatterns = [
     path("api/usuarios/", include("apps.usuarios.urls")),
     # Gestión de sedes y sus horarios de atención
     path("api/sedes/", include("apps.sedes.urls")),
+    # Catálogo del menú: categorías, productos y grupos de opciones
+    path("api/menu/", include("apps.menu.urls")),
 ]

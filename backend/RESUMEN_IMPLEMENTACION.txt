@@ -110,6 +110,42 @@ HU 7 - Gestion de sedes (CRUD para administradores)
   traslapes de horarios el mismo dia.
 - Errores: 400 por datos/horarios invalidos, 401 sin token, 403 si no es admin.
 
+HU 8 - Catalogo del menu (categorias, productos y opciones)
+- GET    /api/menu/categorias/                 -> listar categorias activas (AllowAny).
+- POST   /api/menu/categorias/                 -> crear categoria (operador/admin).
+- GET    /api/menu/categorias/<uuid>/          -> detalle (AllowAny).
+- PUT    /api/menu/categorias/<uuid>/          -> reemplazar categoria (operador/admin).
+- PATCH  /api/menu/categorias/<uuid>/          -> editar categoria (operador/admin).
+- DELETE /api/menu/categorias/<uuid>/          -> desactivacion logica (operador/admin).
+- GET    /api/menu/productos/                  -> listar productos disponibles (AllowAny).
+- POST   /api/menu/productos/                  -> crear producto (operador/admin).
+- GET    /api/menu/productos/<uuid>/           -> detalle (AllowAny).
+- PUT    /api/menu/productos/<uuid>/           -> reemplazar producto (operador/admin).
+- PATCH  /api/menu/productos/<uuid>/           -> editar producto (operador/admin).
+- DELETE /api/menu/productos/<uuid>/           -> borrado logico disponible=False (operador/admin).
+- GET    /api/menu/productos/<uuid>/opciones/  -> listar grupos y opciones (AllowAny).
+- POST   /api/menu/productos/<uuid>/opciones/  -> crear/actualizar grupo con opciones anidadas (operador/admin).
+- El publico y los clientes solo ven categorias activa=True y productos
+  disponible=True; los gestores pueden consultar los inactivos/no disponibles.
+- DELETE de categoria y producto no borra fisicamente; responde 200 con mensaje.
+- Validaciones: precio_base >= 0, tiempo_preparacion_min > 0,
+  max_selecciones >= 1 y tipo de grupo entre tamano/adicion/excluible.
+- Errores: 400 por datos invalidos, 401 sin token, 403 si el rol no es
+  operador ni admin, 404 si el recurso no existe o esta oculto.
+
+Cambios realizados en el modulo de menu (HU 8):
+- services.py: crear_categoria, actualizar_categoria, crear_producto,
+  actualizar_producto, desactivar_producto y configurar_grupo_opciones, con
+  transacciones atomicas y normalizacion de opciones anidadas.
+- serializers.py: CategoriaSerializer, ProductoSerializer,
+  GrupoOpcionSerializer y OpcionProductoSerializer.
+- views.py: CategoriaListCreateView, CategoriaDetailView,
+  ProductoListCreateView, ProductoDetailView y ProductoOpcionesView con
+  permisos por metodo (AllowAny para lectura, operador/admin para escritura).
+- urls.py: rutas de categorias, productos y opciones por UUID.
+- config/urls.py: montaje de api/menu/.
+- tests.py: 15 pruebas APITestCase (23 subtests) del modulo de menu.
+
 Cambios realizados en las HU 5 y 6:
 - services.py: solicitar_recuperacion_password, confirmar_recuperacion_password
   y actualizar_perfil_usuario.
@@ -133,7 +169,7 @@ Cambios realizados en el modulo de sedes (HU 7):
 
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    56 passed, 16 subtests passed
+    71 passed, 39 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).
@@ -141,9 +177,10 @@ Resultado de pruebas:
     .venv/bin/python manage.py makemigrations --check --dry-run
     No changes detected
 
-Las 56 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
+Las 71 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
 HU 4 (registro de personal), 7 de la HU 5 (recuperacion de contrasena),
-4 de la HU 6 (edicion de perfil) y 15 de la HU 7 (gestion de sedes).
+4 de la HU 6 (edicion de perfil), 15 de la HU 7 (gestion de sedes) y
+15 de la HU 8 (catalogo del menu).
 
 
 ==============================================================================
@@ -1786,6 +1823,131 @@ SedeGestionTests (15 pruebas, 16 subtests):
 - editar con horarios traslapados no modifica nada (400)
 - DELETE desactiva sin borrar el registro (activa=False)
 - cliente y repartidor reciben 403 en POST/PUT/PATCH/DELETE
+- sin token en escritura se recibe 401
+
+==============================================================================
+MODULO DE MENU (HU 8)
+==============================================================================
+
+ARCHIVO: apps/menu/services.py
+==============================================================================
+
+Finalidad:
+Concentrar la logica de categorias, productos y grupos de opciones. Las
+operaciones que modifican datos usan transaction.atomic(); la desactivacion de
+categorias/productos es logica y la configuracion de grupos reemplaza sus
+opciones cuando se envia la lista "opciones".
+
+Funciones principales:
+- crear_categoria(*, nombre, descripcion="", orden=0, activa=True)
+- actualizar_categoria(categoria_id, **datos)
+- crear_producto(*, categoria_id=None, nombre, descripcion="",
+  precio_base, imagen_url="", tiempo_preparacion_min, es_combo=False)
+- actualizar_producto(producto_id, **datos)
+- desactivar_producto(producto_id)
+- configurar_grupo_opciones(*, producto_id, nombre, tipo, obligatorio=False,
+  max_selecciones=1, opciones=None, orden=0)
+
+Reglas:
+- precio_base no puede ser negativo.
+- tiempo_preparacion_min y max_selecciones deben ser mayores que cero.
+- tipo debe pertenecer a TipoGrupoOpcion.values
+  (tamano, adicion, excluible).
+- categoria_id, cuando se envia, debe existir.
+- El grupo se identifica por (producto, nombre): si existe se actualiza; si no,
+  se crea.
+- Si "opciones" no es None, se eliminan las opciones actuales del grupo y se
+  crean las nuevas con bulk_create.
+- Cada opcion requiere nombre; precio_adicional >= 0 y orden entero.
+
+ARCHIVO: apps/menu/serializers.py
+==============================================================================
+
+- CategoriaSerializer: expone id, nombre, descripcion, orden y activa.
+- ProductoSerializer: expone categoria_id (source="categoria"), nombre,
+  descripcion, precio_base, imagen_url, tiempo_preparacion_min, es_combo,
+  disponible y grupos_opcion anidados de solo lectura.
+- GrupoOpcionSerializer: expone id, producto, nombre, tipo, obligatorio,
+  max_selecciones, orden y opciones anidadas.
+- OpcionProductoSerializer: expone id, nombre, precio_adicional, activa y
+  orden.
+- precio_base usa min_value=0; tiempo_preparacion_min y max_selecciones usan
+  min_value=1.
+
+ARCHIVO: apps/menu/views.py
+==============================================================================
+
+Vistas:
+- CategoriaListCreateView
+  * GET  /api/menu/categorias/       -> AllowAny; filtra activa=True.
+  * POST /api/menu/categorias/       -> operador/admin; crea categoria.
+- CategoriaDetailView
+  * GET    /api/menu/categorias/<uuid>/ -> AllowAny; inactiva solo gestores.
+  * PUT    /api/menu/categorias/<uuid>/ -> operador/admin.
+  * PATCH  /api/menu/categorias/<uuid>/ -> operador/admin.
+  * DELETE /api/menu/categorias/<uuid>/ -> operador/admin; activa=False.
+- ProductoListCreateView
+  * GET  /api/menu/productos/        -> AllowAny; filtra disponible=True.
+  * POST /api/menu/productos/        -> operador/admin; crea producto.
+- ProductoDetailView
+  * GET    /api/menu/productos/<uuid>/ -> AllowAny; no disponible solo gestores.
+  * PUT    /api/menu/productos/<uuid>/ -> operador/admin.
+  * PATCH  /api/menu/productos/<uuid>/ -> operador/admin.
+  * DELETE /api/menu/productos/<uuid>/ -> operador/admin; disponible=False.
+- ProductoOpcionesView
+  * GET  /api/menu/productos/<uuid>/opciones/ -> AllowAny; grupos y opciones.
+  * POST /api/menu/productos/<uuid>/opciones/ -> operador/admin; upsert de grupo.
+
+Permisos:
+- PERMISO_GESTION = EsOperador | EsAdmin.
+- Se instancia con PERMISO_GESTION() dentro de get_permissions() para que DRF
+  aplique correctamente el operador | de permisos.
+- Lectura publica con AllowAny; escritura exige token (401) y rol autorizado
+  (403).
+
+Respuestas representativas:
+- 201 al crear categoria, producto o grupo de opciones.
+- 200 al consultar, editar o desactivar.
+- 400 por precio/tiempo/max_selecciones/tipo invalidos.
+- 404 si el recurso no existe o esta oculto para el solicitante.
+
+ARCHIVO: apps/menu/urls.py
+==============================================================================
+
+path("categorias/", CategoriaListCreateView.as_view(),
+     name="categoria_list_create"),
+path("categorias/<uuid:pk>/", CategoriaDetailView.as_view(),
+     name="categoria_detail"),
+path("productos/", ProductoListCreateView.as_view(),
+     name="producto_list_create"),
+path("productos/<uuid:pk>/", ProductoDetailView.as_view(),
+     name="producto_detail"),
+path("productos/<uuid:pk>/opciones/", ProductoOpcionesView.as_view(),
+     name="producto_opciones"),
+
+ARCHIVO: config/urls.py
+==============================================================================
+
+path("api/menu/", include("apps.menu.urls")),
+
+ARCHIVO: apps/menu/tests.py
+==============================================================================
+
+MenuGestionTests (15 pruebas, 23 subtests):
+- admin y operador pueden crear categoria (201)
+- operador crea producto valido (201)
+- rechaza precio negativo y tiempo cero/negativo (400)
+- operador actualiza producto (200)
+- DELETE de producto hace borrado logico (200, disponible=False)
+- operador actualiza y desactiva categoria (200, activa=False)
+- crea grupos anidados tamano/adicion/excluible con sus opciones (201)
+- actualizar un grupo reemplaza sus opciones
+- consulta publica de opciones y detalle de producto
+- lista de categorias solo incluye activas
+- detalle de categoria inactiva solo visible para gestores
+- lista de productos solo incluye disponibles
+- detalle de producto no disponible solo visible para gestores
+- clientes y repartidores reciben 403 en escritura
 - sin token en escritura se recibe 401
 
 ==============================================================================
