@@ -33,6 +33,15 @@ export const INICIO_POR_ROL = {
   [ROLES.CLIENTE]: "/cliente",
 }
 
+// Roles que entran a cada sección de la app; App.jsx protege sus rutas con esta tabla.
+export const ROLES_POR_SECCION = {
+  "/admin": [ROLES.ADMIN],
+  "/operador": [ROLES.OPERADOR, ROLES.ADMIN],
+  "/cocina": [ROLES.COCINA, ROLES.OPERADOR, ROLES.ADMIN],
+  "/repartidor": [ROLES.REPARTIDOR],
+  "/cliente": [ROLES.CLIENTE],
+}
+
 export function normalizarRol(rol) {
   return String(rol ?? "").toLowerCase()
 }
@@ -43,10 +52,18 @@ export function etiquetaRol(rol) {
 }
 
 export function rutaInicio(rol) {
-  return INICIO_POR_ROL[normalizarRol(rol)] ?? "/iniciar-sesion"
+  return INICIO_POR_ROL[normalizarRol(rol)] ?? "/panel-no-disponible"
 }
 
 export function tieneRol(usuario, roles) {
   if (!roles || roles.length === 0) return true
   return roles.map(normalizarRol).includes(normalizarRol(usuario?.rol))
+}
+
+// Evita volver tras el ingreso a una ruta que pertenece a otro rol.
+export function puedeEntrarA(rol, ruta) {
+  const seccion = Object.keys(ROLES_POR_SECCION).find(
+    (s) => ruta === s || ruta.startsWith(`${s}/`),
+  )
+  return Boolean(seccion) && tieneRol({ rol }, ROLES_POR_SECCION[seccion])
 }

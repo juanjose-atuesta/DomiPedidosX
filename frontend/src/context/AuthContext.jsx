@@ -4,7 +4,7 @@ import {
   iniciarSesion,
   obtenerPerfil,
 } from "../api/auth"
-import { guardarTokens, limpiarTokens, obtenerAccess } from "../api/cliente"
+import { guardarTokens, limpiarSesion, limpiarTokens, obtenerAccess } from "../api/cliente"
 import { AuthContext } from "./auth-context"
 
 export function AuthProvider({ children }) {
@@ -44,9 +44,10 @@ export function AuthProvider({ children }) {
     return perfil
   }
 
+  // Limpia primero y recarga: la recarga corta peticiones en curso y estado en memoria.
   function logout() {
-    limpiarTokens()
-    setUsuario(null)
+    limpiarSesion()
+    window.location.replace("/login")
   }
 
   async function actualizarPerfil(datos) {

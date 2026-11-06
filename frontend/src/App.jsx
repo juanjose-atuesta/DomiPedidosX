@@ -13,42 +13,44 @@ import Pedidos from "./pages/operador/Pedidos"
 import NuevoPedido from "./pages/operador/NuevoPedido"
 import Carrito from "./pages/cliente/Carrito"
 import PedidoRecibido from "./pages/cliente/PedidoRecibido"
+import PedidosCliente from "./pages/cliente/Pedidos"
 import TableroCocina from "./pages/cocina/TableroCocina"
+import PedidosRepartidor from "./pages/repartidor/PedidosRepartidor"
 import AccesoDenegado from "./pages/AccesoDenegado"
+import PanelNoDisponible from "./pages/PanelNoDisponible"
 import Direcciones from "./pages/cliente/Direcciones"
 import Perfil from "./pages/cliente/Perfil"
 import AgregarDireccion from "./pages/cliente/AgregarDireccion"
 import Bienvenida from "./pages/auth/Bienvenida"
-import IniciarSesion from "./pages/auth/IniciarSesion"
+import Login from "./pages/auth/Login"
 import RecuperarContrasena from "./pages/auth/RecuperarContrasena"
 import Registro from "./pages/auth/Registro"
 import Inicio from "./pages/cliente/Inicio"
 import Producto from "./pages/cliente/Producto"
 import RegistroRestaurante from "./pages/auth/RegistroRestaurante"
+import RegistroAdministrador from "./pages/auth/RegistroAdministrador"
 import RutaProtegida from "./routes/RutaProtegida"
-import RedirigirInicio from "./routes/RedirigirInicio"
+import { ROLES_POR_SECCION } from "./utils/roles"
 
-const ADMIN = ["admin"]
-const OPERADOR = ["operador", "admin"]
-const CLIENTE = ["cliente"]
-const COCINA = ["cocina", "operador", "admin"]
-const REPARTIDOR = ["repartidor"]
-
-function EnConstruccion() {
-  return <p className="p-8 text-texto">Página en construcción</p>
-}
+const ADMIN = ROLES_POR_SECCION["/admin"]
+const OPERADOR = ROLES_POR_SECCION["/operador"]
+const CLIENTE = ROLES_POR_SECCION["/cliente"]
+const COCINA = ROLES_POR_SECCION["/cocina"]
+const REPARTIDOR = ROLES_POR_SECCION["/repartidor"]
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<RedirigirInicio />} />
+      <Route path="/" element={<Navigate to="/login" replace />} />
 
       {/* Autenticación */}
-      <Route path="/login" element={<Bienvenida />} />
-      <Route path="/iniciar-sesion" element={<IniciarSesion />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/iniciar-sesion" element={<Navigate to="/login" replace />} />
+      <Route path="/bienvenida" element={<Bienvenida />} />
       <Route path="/recuperar-contrasena" element={<RecuperarContrasena />} />
       <Route path="/registro" element={<Registro />} />
       <Route path="/registro-restaurante" element={<RegistroRestaurante />} />
+      <Route path="/registro-administrador" element={<RegistroAdministrador />} />
 
       {/* Administración */}
       <Route
@@ -208,6 +210,14 @@ export default function App() {
         }
       />
       <Route
+        path="/cliente/pedidos"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <PedidosCliente />
+          </RutaProtegida>
+        }
+      />
+      <Route
         path="/cliente/direcciones"
         element={
           <RutaProtegida roles={CLIENTE}>
@@ -250,16 +260,24 @@ export default function App() {
         }
       />
 
-      {/* Módulos pendientes de maquetar */}
+      {/* Repartidor */}
       <Route
         path="/repartidor"
         element={
           <RutaProtegida roles={REPARTIDOR}>
-            <EnConstruccion />
+            <PedidosRepartidor />
           </RutaProtegida>
         }
       />
 
+      <Route
+        path="/panel-no-disponible"
+        element={
+          <RutaProtegida>
+            <PanelNoDisponible />
+          </RutaProtegida>
+        }
+      />
       <Route path="/acceso-denegado" element={<AccesoDenegado />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

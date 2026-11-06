@@ -11,7 +11,7 @@ export default function RutaProtegida({ roles, children }) {
   }
 
   if (!usuario) {
-    return <Navigate to="/iniciar-sesion" state={{ desde: location }} replace />
+    return <Navigate to="/login" state={{ desde: location }} replace />
   }
 
   if (!tieneRol(usuario, roles)) {

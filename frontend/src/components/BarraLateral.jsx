@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from "react-router-dom"
+import { NavLink } from "react-router-dom"
 import { useAuth } from "../context/auth-context"
 import { tieneRol } from "../utils/roles"
 
@@ -16,18 +16,15 @@ const ENLACES = [
 const BASE = "flex w-full items-center rounded-lg px-4 py-3 text-base font-semibold"
 
 export default function BarraLateral() {
-  const navigate = useNavigate()
   const { usuario, logout } = useAuth()
   const enlaces = ENLACES.filter(({ roles }) => tieneRol(usuario, roles))
-
-  const cerrarSesion = () => {
-    logout()
-    navigate("/iniciar-sesion", { replace: true })
-  }
 
   return (
     <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-[10px] bg-vino p-4">
       <p className="font-titulo text-[28px] font-semibold leading-9 text-white">DomiPedidosX</p>
+      {usuario?.negocio && (
+        <p className="truncate text-sm text-white/80">{usuario.negocio.nombre}</p>
+      )}
       <nav className="flex flex-col gap-[10px]">
         {enlaces.map(({ texto, ruta }) => (
           <NavLink
@@ -43,7 +40,7 @@ export default function BarraLateral() {
       </nav>
       <button
         type="button"
-        onClick={cerrarSesion}
+        onClick={logout}
         className={`${BASE} mt-auto text-left text-white hover:bg-white/10`}
       >
         Cerrar sesión

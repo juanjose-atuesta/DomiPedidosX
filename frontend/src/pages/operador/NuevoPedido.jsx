@@ -97,7 +97,9 @@ function SelectorCliente({ cliente, onElegir }) {
       />
       {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
       {buscadoDe === busqueda && !error && resultados.length === 0 && (
-        <p className="text-sm text-texto-sec">No encontramos clientes activos.</p>
+        <p className="text-sm text-texto-sec">
+          No encontramos clientes. A un cliente nuevo búscalo con su correo o teléfono exactos.
+        </p>
       )}
       <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto">
         {resultados.map((c) => (

@@ -11,6 +11,7 @@ import { listarDirecciones } from "../../api/direcciones"
 import { crearPedido } from "../../api/pedidos"
 import { listarSedes } from "../../api/sedes"
 import { useCarrito } from "../../context/carrito-context"
+import { etiquetaSede } from "../../utils/catalogo"
 import {
   METODOS_PAGO,
   datosDeEntrega,
@@ -60,7 +61,10 @@ export default function Carrito() {
   const sedeId = sedesConLineas.includes(sedeElegida) ? sedeElegida : (sedesConLineas[0] ?? "")
   const lineas = carritos[sedeId] ?? []
   const subtotal = subtotalLineas(lineas)
-  const nombreSede = (id) => sedes.find((s) => s.id === id)?.nombre ?? "Sede no disponible"
+  const nombreSede = (id) => {
+    const encontrada = sedes.find((s) => s.id === id)
+    return encontrada ? etiquetaSede(encontrada) : "Sede no disponible"
+  }
 
   const direccion =
     direcciones.find((d) => d.id === direccionElegida) ?? direccionPorDefecto(direcciones)

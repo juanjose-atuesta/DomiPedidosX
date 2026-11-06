@@ -5,6 +5,11 @@ export async function registrarCliente(datos) {
   return data
 }
 
+export async function registrarNegocio(datos) {
+  const { data } = await api.post("/usuarios/registro-negocio/", datos)
+  return data
+}
+
 export async function iniciarSesion({ email, password }) {
   const { data } = await api.post("/auth/login/", { email, password })
   return data

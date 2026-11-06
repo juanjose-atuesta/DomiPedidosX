@@ -17,6 +17,11 @@ export function formatearHora(fechaIso) {
   })
 }
 
+export function formatearFechaHora(fechaIso) {
+  const fecha = new Date(fechaIso)
+  return `${fecha.getDate()} ${MESES[fecha.getMonth()]} · ${formatearHora(fechaIso)}`
+}
+
 export function fechaDeHoy() {
   const hoy = new Date()
   const mes = String(hoy.getMonth() + 1).padStart(2, "0")

@@ -1,7 +1,10 @@
 import api from "./cliente"
 
-export async function listarCategorias() {
-  const { data } = await api.get("/menu/categorias/")
+// `negocio` filtra el menú público; el personal siempre recibe el de su negocio.
+export async function listarCategorias(negocio) {
+  const { data } = await api.get("/menu/categorias/", {
+    params: negocio ? { negocio } : undefined,
+  })
   return data
 }
 

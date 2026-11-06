@@ -1,3 +1,8 @@
+// En el catálogo público conviven sedes de varios negocios.
+export function etiquetaSede(sede) {
+  return `${sede.negocio_nombre} · ${sede.nombre}`
+}
+
 // Mismo criterio que el backend guarda en el pedido, para que cliente y cocina lean lo mismo.
 function nombreOpcion(opcion, tipo) {
   if (tipo !== "excluible" || /^sin\s/i.test(opcion.nombre)) return opcion.nombre

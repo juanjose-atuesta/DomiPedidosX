@@ -4,8 +4,8 @@ import { mensajeDeError } from "../utils/errores"
 
 const INTERVALO_ACTUALIZACION_MS = 30000
 
-// Lista pedidos con los filtros dados, la refresca cada 30 s y permite avanzar su estado.
-export function usePedidos({ sede, estado, fecha }) {
+// Lista pedidos con los filtros dados, la refresca periódicamente y permite avanzar su estado.
+export function usePedidos({ sede, estado, fecha, intervalo = INTERVALO_ACTUALIZACION_MS }) {
   const clave = `${sede}|${estado}|${fecha}`
   const [pedidos, setPedidos] = useState([])
   const [cargadoDe, setCargadoDe] = useState(null)
@@ -35,13 +35,13 @@ export function usePedidos({ sede, estado, fecha }) {
         })
 
     cargar()
-    const temporizador = setInterval(cargar, INTERVALO_ACTUALIZACION_MS)
+    const temporizador = setInterval(cargar, intervalo)
 
     return () => {
       vigente = false
       clearInterval(temporizador)
     }
-  }, [clave, sede, estado, fecha])
+  }, [clave, sede, estado, fecha, intervalo])
 
   const avanzar = async (pedido, nuevoEstado) => {
     setProcesandoId(pedido.id)

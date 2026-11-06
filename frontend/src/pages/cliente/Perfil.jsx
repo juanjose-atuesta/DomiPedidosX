@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
 import ClienteLayout from "../../layouts/ClienteLayout"
 import Boton from "../../components/Boton"
 import CampoTexto from "../../components/CampoTexto"
@@ -17,7 +16,6 @@ const FONDO = {
 }
 
 export default function Perfil() {
-  const navigate = useNavigate()
   const { usuario, actualizarPerfil, logout } = useAuth()
   const entradaFoto = useRef(null)
   const [foto, setFoto] = useState(null)
@@ -51,11 +49,6 @@ export default function Perfil() {
     } finally {
       setGuardando(false)
     }
-  }
-
-  const cerrarSesion = () => {
-    logout()
-    navigate("/iniciar-sesion", { replace: true })
   }
 
   return (
@@ -128,7 +121,7 @@ export default function Perfil() {
       </form>
 
       <div className="flex flex-col items-center gap-4 pb-4">
-        <Boton tipo="secundario" onClick={cerrarSesion}>
+        <Boton tipo="secundario" onClick={logout}>
           Cerrar sesión
         </Boton>
         <button

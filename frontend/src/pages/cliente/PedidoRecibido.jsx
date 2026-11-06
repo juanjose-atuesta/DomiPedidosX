@@ -11,10 +11,10 @@ export default function PedidoRecibido() {
   const { state } = useLocation()
   const pedido = state?.pedido
 
-  if (!pedido) return <Navigate to="/cliente" replace />
+  if (!pedido) return <Navigate to="/cliente/pedidos" replace />
 
   return (
-    <ClienteLayout titulo="Pedido recibido" volverA="/cliente" barra>
+    <ClienteLayout titulo="Pedido recibido" volverA="/cliente/pedidos" barra>
       <MensajeAlerta tipo="exito">¡Recibimos tu pedido! La sede ya puede empezar a prepararlo.</MensajeAlerta>
 
       <section className="flex flex-col gap-3 rounded-xl border border-borde bg-white p-4">
@@ -53,7 +53,10 @@ export default function PedidoRecibido() {
         </div>
       </section>
 
-      <Boton anchoCompleto onClick={() => navigate("/cliente")}>
+      <Boton anchoCompleto onClick={() => navigate("/cliente/pedidos")}>
+        Ver mis pedidos
+      </Boton>
+      <Boton tipo="secundario" anchoCompleto onClick={() => navigate("/cliente")}>
         Volver al menú
       </Boton>
     </ClienteLayout>

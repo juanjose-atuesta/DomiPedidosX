@@ -8,6 +8,7 @@ import BarraInferior from "../../components/BarraInferior"
 import { iconoBolsaRoja } from "../../assets"
 import { listarCategorias, obtenerCatalogoSede } from "../../api/menu"
 import { listarSedes } from "../../api/sedes"
+import { etiquetaSede } from "../../utils/catalogo"
 import { mensajeDeError } from "../../utils/errores"
 
 const FONDO = {
@@ -46,16 +47,16 @@ export default function Inicio() {
   const [busqueda, setBusqueda] = useState("")
   const [error, setError] = useState("")
 
-  const sedeId = sedes.some((s) => s.id === sedeElegida) ? sedeElegida : (sedes[0]?.id ?? "")
+  const sede = sedes.find((s) => s.id === sedeElegida) ?? sedes[0]
+  const sedeId = sede?.id ?? ""
+  const negocioId = sede?.negocio_id ?? ""
 
   useEffect(() => {
     let vigente = true
 
-    Promise.all([listarSedes(), listarCategorias()])
-      .then(([datosSedes, datosCategorias]) => {
-        if (!vigente) return
-        setSedes(datosSedes)
-        setCategorias(datosCategorias)
+    listarSedes()
+      .then((datos) => {
+        if (vigente) setSedes(datos)
       })
       .catch((err) => {
         if (vigente) setError(mensajeDeError(err, "No se pudo cargar el menú."))
@@ -73,10 +74,12 @@ export default function Inicio() {
     if (!sedeId) return undefined
     let vigente = true
 
-    obtenerCatalogoSede(sedeId)
-      .then((datos) => {
+    Promise.all([obtenerCatalogoSede(sedeId), listarCategorias(negocioId)])
+      .then(([datosProductos, datosCategorias]) => {
         if (!vigente) return
-        setProductos(datos)
+        setProductos(datosProductos)
+        setCategorias(datosCategorias)
+        setCategoria(TODO)
         setError("")
       })
       .catch((err) => {
@@ -89,7 +92,7 @@ export default function Inicio() {
     return () => {
       vigente = false
     }
-  }, [sedeId])
+  }, [sedeId, negocioId])
 
   const cargando = !sedesListas || (Boolean(sedeId) && cargadoDe !== sedeId)
   const texto = busqueda.trim().toLowerCase()
@@ -147,7 +150,7 @@ export default function Inicio() {
             >
               {sedes.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.nombre}
+                  {etiquetaSede(s)}
                 </option>
               ))}
             </select>

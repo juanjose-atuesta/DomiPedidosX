@@ -3,7 +3,7 @@ import { FlechaIzquierda } from "../components/Iconos"
 import TituloCurvo from "../components/TituloCurvo"
 import { fondoCrema, fondoRojo, iconoBolsaRoja, logoBlanco } from "../assets"
 
-export default function AuthLayout({ variante = "oscuro", volverA, logoGrande = false, children }) {
+export default function AuthLayout({ variante = "oscuro", volverA, logoGrande = false, amplio = false, children }) {
   const navigate = useNavigate()
   const claro = variante === "claro"
   const logo = claro ? iconoBolsaRoja : logoBlanco
@@ -11,14 +11,18 @@ export default function AuthLayout({ variante = "oscuro", volverA, logoGrande = 
 
   return (
     <div className={claro ? "bg-fondo" : "bg-primario"}>
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[430px] flex-col overflow-hidden">
+      <div className={`relative mx-auto flex min-h-screen w-full flex-col overflow-hidden ${amplio ? "" : "max-w-[430px]"}`}>
         <div
           aria-hidden="true"
           className={`absolute inset-0 bg-cover bg-center ${claro ? "scale-105 blur-[2px]" : ""}`}
           style={{ backgroundImage: imagenFondo ? `url(${imagenFondo})` : undefined }}
         />
 
-        <div className="relative z-10 flex flex-1 flex-col px-9 pb-10 pt-14">
+        <div
+          className={`relative z-10 mx-auto flex w-full flex-1 flex-col px-9 pb-10 pt-14 ${
+            amplio ? "max-w-[430px] md:max-w-2xl lg:max-w-4xl" : ""
+          }`}
+        >
           {volverA && (
             <button
               type="button"
