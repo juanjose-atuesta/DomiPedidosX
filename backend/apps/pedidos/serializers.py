@@ -41,7 +41,7 @@ class DetallePedidoInputSerializer(serializers.Serializer):
 class PedidoCreateSerializer(serializers.Serializer):
     sede_id = serializers.PrimaryKeyRelatedField(
         source="sede",
-        queryset=Sede.objects.filter(activa=True),
+        queryset=Sede.objects.filter(activa=True, negocio__activo=True),
     )
     # Solo lo usan operador y admin; si lo envía un cliente se ignora.
     cliente_id = serializers.PrimaryKeyRelatedField(
@@ -178,6 +178,7 @@ class DetallePedidoSalidaSerializer(serializers.ModelSerializer):
 class PedidoSerializer(serializers.ModelSerializer):
     sede_id = serializers.UUIDField(read_only=True)
     sede_nombre = serializers.CharField(source="sede.nombre", read_only=True)
+    negocio_nombre = serializers.CharField(source="sede.negocio.nombre", read_only=True)
     cliente_id = serializers.UUIDField(read_only=True, allow_null=True)
     detalles = DetallePedidoSalidaSerializer(many=True, read_only=True)
     estados_siguientes = serializers.SerializerMethodField()
@@ -197,6 +198,7 @@ class PedidoSerializer(serializers.ModelSerializer):
             "tipo",
             "sede_id",
             "sede_nombre",
+            "negocio_nombre",
             "direccion_entrega",
             "estado",
             "estados_siguientes",

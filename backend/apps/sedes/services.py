@@ -38,6 +38,7 @@ def validar_horarios(horarios):
 
 def crear_sede(
     *,
+    negocio,
     nombre,
     direccion,
     telefono=None,
@@ -51,6 +52,7 @@ def crear_sede(
 
     with transaction.atomic():
         sede = Sede.objects.create(
+            negocio=negocio,
             nombre=nombre,
             direccion=direccion,
             telefono=telefono or "",

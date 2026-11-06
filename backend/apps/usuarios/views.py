@@ -5,9 +5,16 @@ from django.contrib.auth import get_user_model
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
-from apps.core.permissions import EsAdmin, EsCocina, EsOperador, EsRepartidor
+from apps.core.permissions import (
+    EsAdmin,
+    EsCocina,
+    EsOperador,
+    EsRepartidor,
+    exigir_negocio,
+)
 from .models import Direccion, Rol
 from .serializers import (
     RegistroClienteSerializer,
@@ -19,11 +26,13 @@ from .serializers import (
     ConfirmarPasswordResetSerializer,
     ActualizarPerfilSerializer,
     ClienteBusquedaSerializer,
+    RegistroNegocioSerializer,
     DireccionSerializer,
     RolSerializer,
 )
 from .services import (
     registrar_cliente,
+    registrar_negocio,
     crear_usuario_personal,
     solicitar_recuperacion_password,
     confirmar_recuperacion_password,
@@ -55,6 +64,33 @@ class RegistroClienteView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
+class RegistroNegocioView(APIView):
+    """Registro público: crea un negocio y a su administrador.
+
+    Ese administrador solo gestiona su propio negocio. Al igual que el registro
+    de clientes, no devuelve tokens: la sesión se abre con el login.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = RegistroNegocioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        usuario = registrar_negocio(**serializer.validated_data)
+        return Response(
+            {
+                "mensaje": "Negocio registrado exitosamente",
+                "id": str(usuario.id),
+                "email": usuario.email,
+                "negocio": {
+                    "id": str(usuario.negocio_id),
+                    "nombre": usuario.negocio.nombre,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -84,7 +120,14 @@ class RegistroPersonalView(APIView):
         serializer.is_valid(raise_exception=True)
         datos = serializer.validated_data
         sedes_ids = datos.pop("sedes_ids", [])
-        usuario = crear_usuario_personal(**datos, sedes_ids=sedes_ids)
+        try:
+            usuario = crear_usuario_personal(
+                negocio=exigir_negocio(request.user), **datos, sedes_ids=sedes_ids
+            )
+        except ValueError as exc:
+            return Response(
+                {"sedes_ids": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(
             {
                 "mensaje": "Usuario de personal registrado exitosamente",
@@ -134,11 +177,25 @@ class ConfirmarPasswordResetView(APIView):
 # TUS VISTAS (HU 1.6, 1.9 y 1.10)
 # ==========================================
 
+def _usuario_gestionable(request, pk):
+    """Personal del negocio del admin, sin incluirse a sí mismo.
+
+    Un admin no puede quitarse el acceso: su negocio podría quedar sin responsable.
+    """
+    negocio = exigir_negocio(request.user)
+    usuario = get_object_or_404(User, pk=pk, negocio=negocio)
+    if usuario.pk == request.user.pk:
+        raise ValidationError(
+            {"detail": "No puedes cambiar el rol ni desactivar tu propia cuenta."}
+        )
+    return usuario
+
+
 class DesactivarUsuarioView(APIView):
     permission_classes = [EsAdmin]
 
     def patch(self, request, pk):
-        usuario = get_object_or_404(User, pk=pk)
+        usuario = _usuario_gestionable(request, pk)
         usuario.is_active = False
         usuario.save()
         return Response({"mensaje": "Cuenta desactivada exitosamente"}, status=status.HTTP_200_OK)
@@ -148,7 +205,9 @@ class UsuarioListAdminView(APIView):
 
     def get(self, request):
         usuarios = (
-            User.objects.filter(is_active=True)
+            User.objects.filter(
+                is_active=True, negocio=exigir_negocio(request.user)
+            )
             .prefetch_related("sedes_asignadas__sede")
             .order_by("nombre", "apellido")
         )
@@ -159,12 +218,16 @@ class CambiarRolView(APIView):
     permission_classes = [EsAdmin]
 
     def patch(self, request, pk):
-        usuario = get_object_or_404(User, pk=pk)
+        usuario = _usuario_gestionable(request, pk)
         serializer = RolSerializer(data=request.data)
         if serializer.is_valid():
             usuario.rol = serializer.validated_data['rol']
             usuario.is_staff = usuario.rol == Rol.ADMIN
-            usuario.save(update_fields=["rol", "is_staff"])
+            # Un cliente no pertenece a ningún negocio ni trabaja en sus sedes.
+            if usuario.rol == Rol.CLIENTE:
+                usuario.negocio = None
+                usuario.sedes_asignadas.all().delete()
+            usuario.save(update_fields=["rol", "is_staff", "negocio"])
             return Response({"mensaje": f"Rol actualizado a {usuario.rol}"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -213,29 +276,43 @@ class DireccionDetailView(APIView):
 
 
 class ClienteBusquedaView(APIView):
-    """Busca clientes activos para registrar pedidos a su nombre."""
+    """Busca clientes activos para registrar pedidos a su nombre.
+
+    Los clientes no pertenecen a un negocio, así que solo se listan los que ya le
+    han comprado. A uno nuevo se le encuentra con su correo o teléfono exactos,
+    los datos que da al hacer el pedido; así no se expone toda la base de clientes.
+    """
 
     permission_classes = [EsOperador | EsAdmin]
     LIMITE_RESULTADOS = 20
 
     def get(self, request):
-        clientes = User.objects.filter(rol=Rol.CLIENTE, is_active=True)
+        negocio = exigir_negocio(request.user)
+        busqueda = request.query_params.get("q", "").strip()
 
-        for termino in request.query_params.get("q", "").split():
-            clientes = clientes.filter(
+        condicion = Q(pedidos__sede__negocio=negocio)
+        for termino in busqueda.split():
+            condicion &= (
                 Q(nombre__icontains=termino)
                 | Q(apellido__icontains=termino)
                 | Q(email__icontains=termino)
                 | Q(telefono__icontains=termino)
             )
+        if busqueda:
+            condicion |= Q(email__iexact=busqueda) | Q(telefono=busqueda)
 
-        clientes = clientes.prefetch_related(
-            Prefetch(
-                "direcciones",
-                queryset=Direccion.objects.filter(activa=True),
-                to_attr="direcciones_activas",
+        clientes = (
+            User.objects.filter(condicion, rol=Rol.CLIENTE, is_active=True)
+            .distinct()
+            .prefetch_related(
+                Prefetch(
+                    "direcciones",
+                    queryset=Direccion.objects.filter(activa=True),
+                    to_attr="direcciones_activas",
+                )
             )
-        ).order_by("nombre", "apellido")[: self.LIMITE_RESULTADOS]
+            .order_by("nombre", "apellido")[: self.LIMITE_RESULTADOS]
+        )
         return Response(ClienteBusquedaSerializer(clientes, many=True).data)
 
 

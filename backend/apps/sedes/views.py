@@ -3,7 +3,7 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import EsAdmin
+from apps.core.permissions import EsAdmin, exigir_negocio
 from apps.usuarios.models import Rol
 
 from .models import Sede
@@ -28,6 +28,20 @@ def _es_admin_autenticado(request):
     )
 
 
+def _es_personal(request):
+    usuario = getattr(request, "user", None)
+    return bool(usuario and usuario.is_authenticated and usuario.rol != Rol.CLIENTE)
+
+
+def _es_de_su_negocio(request, sede):
+    """Sedes que un admin puede gestionar; las de otro negocio son como si no existieran."""
+    return (
+        sede is not None
+        and bool(request.user.negocio_id)
+        and sede.negocio_id == request.user.negocio_id
+    )
+
+
 def _solicita_incluir_inactivas(request):
     valor = request.query_params.get("incluir_inactivas", "")
     return valor.strip().lower() in {"1", "true", "si", "sí"}
@@ -35,7 +49,7 @@ def _solicita_incluir_inactivas(request):
 
 def _obtener_sede(pk):
     try:
-        return Sede.objects.prefetch_related("horarios").get(pk=pk)
+        return Sede.objects.select_related("negocio").prefetch_related("horarios").get(pk=pk)
     except (Sede.DoesNotExist, DjangoValidationError, ValueError):
         return None
 
@@ -47,7 +61,13 @@ class SedeListCreateView(APIView):
         return [permissions.AllowAny()]
 
     def get(self, request):
-        sedes = Sede.objects.prefetch_related("horarios")
+        sedes = Sede.objects.select_related("negocio").prefetch_related("horarios")
+
+        # El personal solo ve su negocio; el público, las sedes de todos.
+        if _es_personal(request):
+            sedes = sedes.filter(negocio_id=request.user.negocio_id)
+        else:
+            sedes = sedes.filter(negocio__activo=True)
 
         ver_inactivas = (
             _es_admin_autenticado(request)
@@ -67,7 +87,9 @@ class SedeListCreateView(APIView):
         horarios = datos.pop("horarios", [])
 
         try:
-            sede = crear_sede(**datos, horarios=horarios)
+            sede = crear_sede(
+                negocio=exigir_negocio(request.user), **datos, horarios=horarios
+            )
         except ValueError as exc:
             return Response(
                 {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
@@ -92,7 +114,9 @@ class SedeDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not sede.activa and not _es_admin_autenticado(request):
+        if not sede.activa and not (
+            _es_admin_autenticado(request) and _es_de_su_negocio(request, sede)
+        ):
             return Response(
                 {"detail": MENSAJE_SEDE_NO_ENCONTRADA},
                 status=status.HTTP_404_NOT_FOUND,
@@ -108,7 +132,7 @@ class SedeDetailView(APIView):
 
     def _actualizar(self, request, pk, *, partial):
         sede = _obtener_sede(pk)
-        if sede is None:
+        if not _es_de_su_negocio(request, sede):
             return Response(
                 {"detail": MENSAJE_SEDE_NO_ENCONTRADA},
                 status=status.HTTP_404_NOT_FOUND,
@@ -131,7 +155,7 @@ class SedeDetailView(APIView):
 
     def delete(self, request, pk):
         sede = _obtener_sede(pk)
-        if sede is None:
+        if not _es_de_su_negocio(request, sede):
             return Response(
                 {"detail": MENSAJE_SEDE_NO_ENCONTRADA},
                 status=status.HTTP_404_NOT_FOUND,
@@ -146,7 +170,7 @@ class SedeReactivarView(APIView):
 
     def post(self, request, pk):
         sede = _obtener_sede(pk)
-        if sede is None:
+        if not _es_de_su_negocio(request, sede):
             return Response(
                 {"detail": MENSAJE_SEDE_NO_ENCONTRADA},
                 status=status.HTTP_404_NOT_FOUND,

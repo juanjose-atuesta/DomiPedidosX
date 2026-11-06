@@ -46,17 +46,17 @@ def _fecha(valor, campo):
     return fecha
 
 
-def _resolver_sede(sede_id):
+def _resolver_sede(sede_id, negocio_id):
     if sede_id in (None, ""):
         return None
 
     try:
-        return Sede.objects.get(pk=sede_id)
+        return Sede.objects.get(pk=sede_id, negocio_id=negocio_id)
     except (Sede.DoesNotExist, ValueError, TypeError):
         raise ValueError("La sede indicada no existe.")
 
 
-def _resolver_productos(productos_ids):
+def _resolver_productos(productos_ids, negocio_id):
     productos = []
     productos_vistos = set()
 
@@ -65,7 +65,7 @@ def _resolver_productos(productos_ids):
             producto = valor
         else:
             try:
-                producto = Producto.objects.get(pk=valor)
+                producto = Producto.objects.get(pk=valor, negocio_id=negocio_id)
             except (Producto.DoesNotExist, ValueError, TypeError):
                 raise ValueError("Uno de los productos indicados no existe.")
 
@@ -124,11 +124,11 @@ def _normalizar_codigo(codigo):
     return codigo or None
 
 
-def _validar_codigo_unico(codigo, *, excluir_id=None):
+def _validar_codigo_unico(codigo, negocio_id, *, excluir_id=None):
     if codigo is None:
         return
 
-    consulta = Promocion.objects.filter(codigo=codigo)
+    consulta = Promocion.objects.filter(codigo=codigo, negocio_id=negocio_id)
     if excluir_id is not None:
         consulta = consulta.exclude(pk=excluir_id)
     if consulta.exists():
@@ -137,6 +137,7 @@ def _validar_codigo_unico(codigo, *, excluir_id=None):
 
 def crear_promocion(
     *,
+    negocio,
     sede_id=None,
     nombre,
     descripcion="",
@@ -160,12 +161,13 @@ def crear_promocion(
     inicio, fin = _validar_fechas(fecha_inicio, fecha_fin)
     minimo = _decimal(pedido_minimo, "pedido_minimo")
     codigo = _normalizar_codigo(codigo)
-    _validar_codigo_unico(codigo)
-    sede = _resolver_sede(sede_id)
-    productos = _resolver_productos(productos_ids)
+    _validar_codigo_unico(codigo, negocio.pk)
+    sede = _resolver_sede(sede_id, negocio.pk)
+    productos = _resolver_productos(productos_ids, negocio.pk)
 
     with transaction.atomic():
         promocion = Promocion.objects.create(
+            negocio=negocio,
             sede=sede,
             nombre=nombre,
             descripcion=descripcion,
@@ -204,11 +206,13 @@ def actualizar_promocion(promocion_id, **datos):
             promocion.descripcion = datos["descripcion"]
 
         if "sede_id" in datos:
-            promocion.sede = _resolver_sede(datos["sede_id"])
+            promocion.sede = _resolver_sede(datos["sede_id"], promocion.negocio_id)
 
         if "codigo" in datos:
             codigo = _normalizar_codigo(datos["codigo"])
-            _validar_codigo_unico(codigo, excluir_id=promocion.pk)
+            _validar_codigo_unico(
+                codigo, promocion.negocio_id, excluir_id=promocion.pk
+            )
             promocion.codigo = codigo
 
         porcentaje = datos.get(
@@ -233,7 +237,9 @@ def actualizar_promocion(promocion_id, **datos):
         promocion.save()
 
         if "productos_ids" in datos:
-            productos = _resolver_productos(datos["productos_ids"])
+            productos = _resolver_productos(
+                datos["productos_ids"], promocion.negocio_id
+            )
             PromocionProducto.objects.filter(
                 promocion=promocion
             ).delete()

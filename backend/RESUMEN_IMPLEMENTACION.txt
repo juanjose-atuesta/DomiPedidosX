@@ -404,8 +404,12 @@ Operacion de pedidos (PMV - Entrega 1):
 - POST /api/pedidos/: operador y admin pueden enviar cliente_id (debe ser un
   cliente activo). El operador solo crea pedidos en sus sedes. Un cliente siempre
   compra a su nombre y el descuento que envie se ignora.
-- Limitaciones: no hay endpoint para cancelar pedidos, el repartidor aun no puede
-  cambiar estados y el costo_domicilio lo sigue enviando quien crea el pedido.
+- GET /api/pedidos/: el cliente ve solo sus pedidos. El repartidor ve los domicilios
+  de sus sedes que ya lleva o que nadie ha tomado (listo_despacho o en_camino).
+- PATCH estado por repartidor: al cambiar el estado el pedido queda a su nombre; otro
+  repartidor ya no lo ve (404). La respuesta incluye negocio_nombre.
+- Limitaciones: no hay endpoint para cancelar pedidos y el costo_domicilio lo sigue
+  enviando quien crea el pedido.
 
 Ajustes para conectar el frontend:
 - GET /api/menu/productos/?incluir_inactivos=true (solo operador/admin).
@@ -423,9 +427,29 @@ Carrito y pedidos del operador:
   cambios de estado no lo modifican.
 - Un ingrediente excluible se guarda en el pedido como "Sin <ingrediente>".
 
+Multi-negocio:
+- apps/negocios: modelo Negocio (nombre, descripcion, logo_url, activo). La fecha
+  de creacion es creado_en. Sede, Categoria, Producto y Promocion tienen negocio
+  obligatorio; User.negocio es opcional: los clientes no pertenecen a ninguno.
+- La migracion negocios.0002 asigna los datos anteriores a "Negocio principal".
+- POST /api/usuarios/registro-negocio/ (AllowAny): crea el negocio y su admin en
+  una transaccion. Como el registro de clientes, no devuelve tokens.
+- Alcance: el rol admin gestiona solo su negocio. Las sedes, categorias, productos,
+  combos, promociones, pedidos e inventario de otro negocio responden 404 o 403, y
+  tampoco se pueden enlazar (400). Personal sin negocio no ve ni crea nada.
+- Publico y clientes ven los negocios activos; GET de categorias, productos y
+  combos acepta ?negocio=<id>. El personal siempre recibe solo el suyo.
+- Promocion.codigo es unico por negocio.
+- GET /api/usuarios/usuarios/, cambiar-rol y desactivar actuan solo sobre personal
+  del propio negocio, y un admin no puede cambiarse ni desactivarse a si mismo.
+- GET /api/usuarios/clientes/: lista por nombre solo a quienes ya compraron en el
+  negocio; a un cliente nuevo se le encuentra con correo o telefono exactos.
+- Limitaciones: ningun rol puede desactivar cuentas de clientes ni negocios (solo
+  el admin de Django), el registro publico no verifica el correo ni limita intentos.
+
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    175 passed, 97 subtests passed
+    218 passed, 136 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).

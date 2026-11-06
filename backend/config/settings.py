@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # Apps del proyecto
     "apps.core",
+    "apps.negocios",
     "apps.usuarios",
     "apps.sedes",
     "apps.menu",

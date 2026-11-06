@@ -87,11 +87,26 @@ class LoginSerializer(TokenObtainPairSerializer):
 
 class UsuarioSerializer(serializers.ModelSerializer):
     sedes = serializers.SerializerMethodField()
+    negocio = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "nombre", "apellido", "email", "telefono", "rol", "sedes")
+        fields = (
+            "id",
+            "nombre",
+            "apellido",
+            "email",
+            "telefono",
+            "rol",
+            "negocio",
+            "sedes",
+        )
         read_only_fields = fields
+
+    def get_negocio(self, obj):
+        if not obj.negocio_id:
+            return None
+        return {"id": str(obj.negocio_id), "nombre": obj.negocio.nombre}
 
     def get_sedes(self, obj):
         # Sedes activas donde trabaja; define el alcance en las pantallas de personal.
@@ -229,3 +244,16 @@ class ClienteBusquedaSerializer(serializers.ModelSerializer):
 
     def get_direcciones(self, obj):
         return DireccionSerializer(obj.direcciones_activas, many=True).data
+
+
+class RegistroNegocioSerializer(RegistroClienteSerializer):
+    """Datos del administrador (como un cliente) más los de su negocio."""
+
+    negocio_nombre = serializers.CharField(max_length=150)
+    negocio_descripcion = serializers.CharField(required=False, allow_blank=True)
+
+    class Meta(RegistroClienteSerializer.Meta):
+        fields = RegistroClienteSerializer.Meta.fields + (
+            "negocio_nombre",
+            "negocio_descripcion",
+        )

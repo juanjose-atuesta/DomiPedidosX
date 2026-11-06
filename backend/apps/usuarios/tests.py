@@ -8,6 +8,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.usuarios.models import Rol, User
 
 CLAVE = "Clave123!"
@@ -16,6 +17,7 @@ CLAVE = "Clave123!"
 def crear_usuario(email, rol, **extra):
     """Crea un usuario con los campos obligatorios del modelo."""
     return User.objects.create_user(
+        negocio=negocio_de_rol(rol),
         email=email, password=CLAVE, rol=rol,
         nombre="Prueba", apellido="Uno", telefono="3000000000", **extra,
     )
@@ -130,6 +132,7 @@ def test_sin_token_no_accede():
 
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
@@ -140,6 +143,9 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
+from apps.inventario.models import InventarioSede
+from apps.menu.models import Producto
+from apps.pedidos.services import crear_pedido
 from apps.sedes.models import Sede, SedeUsuario
 
 from .models import Direccion, PerfilRepartidor, Rol, User
@@ -391,11 +397,12 @@ class MeTests(APITestCase):
         self.assertEqual(response.data["rol"], self.usuario.rol)
 
     def test_me_incluye_solo_sedes_activas_asignadas(self):
-        activa = Sede.objects.create(nombre="Activa", direccion="Calle 1")
+        activa = Sede.objects.create(negocio=negocio_prueba(), nombre="Activa", direccion="Calle 1")
         inactiva = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Inactiva", direccion="Calle 2", activa=False
         )
-        Sede.objects.create(nombre="No asignada", direccion="Calle 3")
+        Sede.objects.create(negocio=negocio_prueba(), nombre="No asignada", direccion="Calle 3")
         SedeUsuario.objects.create(usuario=self.usuario, sede=activa)
         SedeUsuario.objects.create(usuario=self.usuario, sede=inactiva)
 
@@ -425,9 +432,11 @@ class GestionUsuariosAdminTests(APITestCase):
         self.admin = self._crear("admin.gestion@example.com", Rol.ADMIN)
         self.operador = self._crear("operador.gestion@example.com", Rol.OPERADOR)
         self.cliente = self._crear("cliente.gestion@example.com", Rol.CLIENTE)
+        self.cocina = self._crear("cocina.gestion@example.com", Rol.COCINA)
 
     def _crear(self, email, rol, **extra):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -450,33 +459,61 @@ class GestionUsuariosAdminTests(APITestCase):
         )
 
     def test_cambiar_rol_sincroniza_is_staff(self):
-        response = self._cambiar_rol(self.cliente, Rol.ADMIN)
+        response = self._cambiar_rol(self.cocina, Rol.ADMIN)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.cliente.refresh_from_db()
-        self.assertEqual(self.cliente.rol, Rol.ADMIN)
-        self.assertTrue(self.cliente.is_staff)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.ADMIN)
+        self.assertTrue(self.cocina.is_staff)
 
-        response = self._cambiar_rol(self.cliente, Rol.COCINA)
+        response = self._cambiar_rol(self.cocina, Rol.OPERADOR)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.cliente.refresh_from_db()
-        self.assertEqual(self.cliente.rol, Rol.COCINA)
-        self.assertFalse(self.cliente.is_staff)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.OPERADOR)
+        self.assertFalse(self.cocina.is_staff)
+
+    def test_pasar_a_cliente_lo_saca_del_negocio(self):
+        sede = Sede.objects.create(
+            negocio=self.cocina.negocio, nombre="Norte", direccion="Calle 1"
+        )
+        SedeUsuario.objects.create(usuario=self.cocina, sede=sede)
+
+        response = self._cambiar_rol(self.cocina, Rol.CLIENTE)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cocina.refresh_from_db()
+        self.assertIsNone(self.cocina.negocio)
+        self.assertFalse(self.cocina.sedes_asignadas.exists())
+
+    def test_admin_no_se_quita_el_acceso_a_si_mismo(self):
+        response_rol = self._cambiar_rol(self.admin, Rol.CLIENTE)
+        response_desactivar = self.client.patch(
+            reverse("desactivar-usuario", args=[self.admin.pk]),
+            **self._auth(self.admin),
+        )
+
+        self.assertEqual(response_rol.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response_desactivar.status_code, status.HTTP_400_BAD_REQUEST
+        )
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.rol, Rol.ADMIN)
+        self.assertTrue(self.admin.is_active)
 
     def test_cambiar_rol_invalido_da_400(self):
-        response = self._cambiar_rol(self.cliente, "gerente")
+        response = self._cambiar_rol(self.cocina, "gerente")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.cliente.refresh_from_db()
-        self.assertEqual(self.cliente.rol, Rol.CLIENTE)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.COCINA)
 
     def test_staff_sin_rol_admin_no_cambia_roles_ni_desactiva(self):
         staff = self._crear(
             "staff.gestion@example.com", Rol.OPERADOR, is_staff=True
         )
 
-        response_rol = self._cambiar_rol(self.cliente, Rol.ADMIN, actor=staff)
+        response_rol = self._cambiar_rol(self.cocina, Rol.ADMIN, actor=staff)
         response_desactivar = self.client.patch(
-            reverse("desactivar-usuario", args=[self.cliente.pk]),
+            reverse("desactivar-usuario", args=[self.cocina.pk]),
             **self._auth(staff),
         )
 
@@ -484,25 +521,36 @@ class GestionUsuariosAdminTests(APITestCase):
         self.assertEqual(
             response_desactivar.status_code, status.HTTP_403_FORBIDDEN
         )
-        self.cliente.refresh_from_db()
-        self.assertEqual(self.cliente.rol, Rol.CLIENTE)
-        self.assertTrue(self.cliente.is_active)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.COCINA)
+        self.assertTrue(self.cocina.is_active)
 
-    def test_admin_desactiva_usuario(self):
+    def test_admin_desactiva_personal_de_su_negocio(self):
+        response = self.client.patch(
+            reverse("desactivar-usuario", args=[self.cocina.pk]),
+            **self._auth(self.admin),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cocina.refresh_from_db()
+        self.assertFalse(self.cocina.is_active)
+
+    def test_admin_no_gestiona_a_un_cliente(self):
         response = self.client.patch(
             reverse("desactivar-usuario", args=[self.cliente.pk]),
             **self._auth(self.admin),
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.cliente.refresh_from_db()
-        self.assertFalse(self.cliente.is_active)
+        self.assertTrue(self.cliente.is_active)
 
 
 class RegistroPersonalTests(APITestCase):
     def setUp(self):
         self.url = reverse("registro_personal")
         self.admin = User.objects.create_user(
+            negocio=negocio_de_rol(Rol.ADMIN),
             email="admin@example.com",
             password=PASSWORD,
             nombre="Admin",
@@ -512,12 +560,15 @@ class RegistroPersonalTests(APITestCase):
             is_staff=True,
         )
         self.sede1 = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Norte", direccion="Calle 1"
         )
         self.sede2 = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Sur", direccion="Calle 2"
         )
         self.sede_inactiva = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Cerrada", direccion="Calle 3", activa=False
         )
 
@@ -676,6 +727,7 @@ class RegistroPersonalTests(APITestCase):
 
     def test_email_duplicado_sin_distinguir_mayusculas(self):
         User.objects.create_user(
+            negocio=negocio_de_rol(Rol.COCINA),
             email="personal.dup@example.com",
             password=PASSWORD,
             nombre="Existente",
@@ -989,6 +1041,7 @@ class ClienteBusquedaTests(APITestCase):
 
     def _crear(self, email, nombre, apellido, rol, **extra):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email, password=PASSWORD, nombre=nombre, apellido=apellido,
             telefono="3001112233", rol=rol, **extra,
         )
@@ -997,20 +1050,50 @@ class ClienteBusquedaTests(APITestCase):
         token = LoginSerializer.get_token(usuario).access_token
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
-    def test_operador_busca_solo_clientes_activos(self):
-        response = self.client.get(
-            self.url, {"q": "ana"}, **self._auth(self.operador)
+    def _comprar(self, cliente):
+        """El cliente hace un pedido en el negocio del operador."""
+        sede = Sede.objects.create(
+            negocio=self.operador.negocio, nombre="Norte", direccion="Calle 1"
+        )
+        producto = Producto.objects.create(
+            negocio=self.operador.negocio,
+            nombre="Papas",
+            precio_base=Decimal("1000.00"),
+            tiempo_preparacion_min=5,
+        )
+        InventarioSede.objects.create(sede=sede, producto=producto, controla_stock=False)
+        crear_pedido(
+            sede=sede, cliente=cliente, detalles=[{"producto": producto, "cantidad": 1}]
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual([c["id"] for c in response.data], [str(self.ana.pk)])
+    def _buscar(self, q=None):
+        parametros = {"q": q} if q else {}
+        return self.client.get(self.url, parametros, **self._auth(self.operador))
 
-    def test_busca_por_nombre_y_apellido_a_la_vez(self):
-        response = self.client.get(
-            self.url, {"q": "ana gomez"}, **self._auth(self.operador)
-        )
+    def test_sin_compras_no_se_lista_por_nombre(self):
+        self.assertEqual(self._buscar().data, [])
+        self.assertEqual(self._buscar("ana").data, [])
 
-        self.assertEqual([c["id"] for c in response.data], [str(self.ana.pk)])
+    def test_cliente_nuevo_se_encuentra_con_datos_exactos(self):
+        for q in ("ana@example.com", "ANA@example.com"):
+            with self.subTest(q=q):
+                response = self._buscar(q)
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(
+                    [c["id"] for c in response.data], [str(self.ana.pk)]
+                )
+
+    def test_cliente_con_compras_se_busca_por_nombre_y_apellido(self):
+        self._comprar(self.ana)
+
+        for q in (None, "ana", "ana gomez"):
+            with self.subTest(q=q):
+                self.assertEqual(
+                    [c["id"] for c in self._buscar(q).data], [str(self.ana.pk)]
+                )
+
+    def test_no_devuelve_clientes_inactivos(self):
+        self.assertEqual(self._buscar("off@example.com").data, [])
 
     def test_incluye_solo_direcciones_activas(self):
         Direccion.objects.create(
@@ -1022,9 +1105,7 @@ class ClienteBusquedaTests(APITestCase):
             latitud="3.45", longitud="-76.53", activa=False,
         )
 
-        response = self.client.get(
-            self.url, {"q": "ana"}, **self._auth(self.operador)
-        )
+        response = self._buscar("ana@example.com")
 
         self.assertEqual(
             [d["alias"] for d in response.data[0]["direcciones"]], ["Casa"]

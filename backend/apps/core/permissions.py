@@ -1,7 +1,7 @@
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
-from apps.sedes.models import SedeUsuario
+from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol
 
 
@@ -47,19 +47,26 @@ EsAdmin = RolPermitido(Rol.ADMIN)
 
 
 def usuario_opera_en_sede(user, sede):
-    """Indica si el usuario trabaja en una sede.
+    """Indica si el usuario trabaja en una sede de su negocio.
 
-    `sede` puede ser una instancia de Sede, su id o None (recurso global). El
-    admin opera en cualquiera; el resto solo en las que tiene asignadas en
-    SedeUsuario y nunca sobre recursos globales. El rol lo valida cada vista.
+    `sede` puede ser una instancia de Sede, su id o None (recurso de todo el
+    negocio). El admin opera en todas las sedes de su negocio; el resto solo en
+    las asignadas en SedeUsuario y nunca sobre recursos de todo el negocio. Sin
+    negocio no se opera en ninguna. El rol lo valida cada vista.
     """
-    if not user.is_authenticated or not user.is_active:
+    if not user.is_authenticated or not user.is_active or not user.negocio_id:
         return False
     if user.rol == Rol.ADMIN:
-        return True
+        if sede is None:
+            return True
+        return Sede.objects.filter(
+            pk=getattr(sede, "pk", sede), negocio_id=user.negocio_id
+        ).exists()
     if sede is None:
         return False
-    return SedeUsuario.objects.filter(usuario=user, sede=sede).exists()
+    return SedeUsuario.objects.filter(
+        usuario=user, sede=sede, sede__negocio_id=user.negocio_id
+    ).exists()
 
 
 def usuario_puede_gestionar_sede(user, sede):
@@ -70,6 +77,13 @@ def usuario_puede_gestionar_sede(user, sede):
     if user.rol not in (Rol.ADMIN, Rol.OPERADOR):
         return False
     return usuario_opera_en_sede(user, sede)
+
+
+def exigir_negocio(user):
+    """Devuelve el negocio del usuario; sin negocio no puede gestionar nada (403)."""
+    if not user.negocio_id:
+        raise PermissionDenied("Tu cuenta no pertenece a ningún negocio.")
+    return user.negocio
 
 
 def exigir_gestion_sede(user, sede):

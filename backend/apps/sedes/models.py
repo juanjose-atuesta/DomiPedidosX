@@ -6,6 +6,9 @@ from apps.core.models import DiaSemana, ModeloUUID
 
 
 class Sede(ModeloUUID):
+    negocio = models.ForeignKey(
+        "negocios.Negocio", on_delete=models.PROTECT, related_name="sedes"
+    )
     nombre = models.CharField(max_length=100)
     direccion = models.TextField()
     telefono = models.CharField(max_length=20, blank=True)

@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.inventario.models import InventarioSede
 from apps.menu.models import (
     GrupoOpcion,
@@ -18,8 +19,14 @@ from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
-from .models import DetallePedido, HistorialEstado, Pedido
-from .services import crear_pedido
+from .models import (
+    DetallePedido,
+    EstadoPedido,
+    HistorialEstado,
+    Pedido,
+    TipoPedido,
+)
+from .services import cambiar_estado_pedido, crear_pedido
 
 PASSWORD = "ClaveSegura#2024"
 
@@ -36,22 +43,26 @@ class PedidoInventarioTests(APITestCase):
         self.cliente_token = self._token(self.cliente)
 
         self.sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Norte",
             direccion="Calle 20 # 30-40",
         )
         SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
 
         self.producto = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Hamburguesa",
             precio_base=Decimal("15000.00"),
             tiempo_preparacion_min=15,
         )
         self.adicional = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Limonada",
             precio_base=Decimal("5000.00"),
             tiempo_preparacion_min=5,
         )
         self.combo = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Combo Hamburguesa",
             precio_base=Decimal("20000.00"),
             tiempo_preparacion_min=20,
@@ -91,6 +102,7 @@ class PedidoInventarioTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -235,8 +247,8 @@ class PedidoInventarioTests(APITestCase):
 
 class PedidoOperacionTests(APITestCase):
     def setUp(self):
-        self.sede = Sede.objects.create(nombre="Sede Norte", direccion="Calle 1")
-        self.otra_sede = Sede.objects.create(nombre="Sede Sur", direccion="Calle 2")
+        self.sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Sede Norte", direccion="Calle 1")
+        self.otra_sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Sede Sur", direccion="Calle 2")
 
         self.admin = self._crear_usuario(Rol.ADMIN, "admin@example.com")
         self.operador = self._crear_usuario(Rol.OPERADOR, "operador@example.com")
@@ -247,6 +259,7 @@ class PedidoOperacionTests(APITestCase):
         SedeUsuario.objects.create(usuario=self.cocina, sede=self.sede)
 
         self.producto = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Hamburguesa",
             precio_base=Decimal("15000.00"),
             tiempo_preparacion_min=15,
@@ -262,6 +275,7 @@ class PedidoOperacionTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -358,12 +372,35 @@ class PedidoOperacionTests(APITestCase):
         )
         self.assertEqual(self._ids(response), {self.pedido_ajeno.pk})
 
-    def test_cliente_y_repartidor_no_listan_pedidos(self):
-        for usuario in (self.cliente, self.repartidor):
-            with self.subTest(rol=usuario.rol):
-                response = self.client.get(self.url, **self._auth(usuario))
-                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+    def test_cliente_solo_lista_sus_pedidos(self):
+        propio = self._crear_pedido(self.sede, cliente=self.cliente)
 
+        response = self.client.get(self.url, **self._auth(self.cliente))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._ids(response), {propio.pk})
+        self.assertEqual(response.data[0]["sede_nombre"], "Sede Norte")
+        self.assertEqual(response.data[0]["negocio_nombre"], self.sede.negocio.nombre)
+
+    def test_cliente_filtra_sus_pedidos_por_sede_sin_trabajar_en_ella(self):
+        self._crear_pedido(self.sede, cliente=self.cliente)
+        en_otra = self._crear_pedido(self.otra_sede, cliente=self.cliente)
+
+        response = self.client.get(
+            self.url, {"sede": str(self.otra_sede.pk)}, **self._auth(self.cliente)
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._ids(response), {en_otra.pk})
+
+    def test_cliente_no_avanza_el_estado_de_su_propio_pedido(self):
+        propio = self._crear_pedido(self.sede, cliente=self.cliente)
+
+        response = self._cambiar_estado(propio, "en_preparacion", self.cliente)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_listar_pedidos_exige_sesion(self):
         self.assertEqual(
             self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED
         )
@@ -516,11 +553,13 @@ class PedidoOperacionTests(APITestCase):
 
     def test_el_producto_debe_venderse_en_la_sede(self):
         sin_fila = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sin fila",
             precio_base=Decimal("1000.00"),
             tiempo_preparacion_min=5,
         )
         no_disponible = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Apagado",
             precio_base=Decimal("1000.00"),
             tiempo_preparacion_min=5,
@@ -659,3 +698,156 @@ class PedidoOperacionTests(APITestCase):
             for opcion in response.data["detalles"][0]["opciones"]
         }
         self.assertEqual(nombres, {"Sin cebolla", "Sin sal"})
+
+
+class PedidoRepartidorTests(APITestCase):
+    def setUp(self):
+        self.sede = Sede.objects.create(
+            negocio=negocio_prueba(), nombre="Sede Norte", direccion="Calle 1"
+        )
+        self.otra_sede = Sede.objects.create(
+            negocio=negocio_prueba(), nombre="Sede Sur", direccion="Calle 2"
+        )
+        self.repartidor = self._crear_repartidor("repartidor@example.com")
+        self.colega = self._crear_repartidor("colega@example.com")
+        self.producto = Producto.objects.create(
+            negocio=negocio_prueba(),
+            nombre="Hamburguesa",
+            precio_base=Decimal("15000.00"),
+            tiempo_preparacion_min=15,
+        )
+        for sede in (self.sede, self.otra_sede):
+            InventarioSede.objects.create(
+                sede=sede, producto=self.producto, controla_stock=False
+            )
+        self.url = reverse("pedido_list_create")
+
+    def _crear_repartidor(self, email):
+        usuario = User.objects.create_user(
+            negocio=negocio_de_rol(Rol.REPARTIDOR),
+            email=email,
+            password=PASSWORD,
+            nombre="Prueba",
+            apellido="Reparto",
+            telefono="3000000000",
+            rol=Rol.REPARTIDOR,
+        )
+        SedeUsuario.objects.create(usuario=usuario, sede=self.sede)
+        return usuario
+
+    def _pedido(self, estado=EstadoPedido.LISTO_DESPACHO, sede=None, tipo=TipoPedido.DOMICILIO):
+        pedido = crear_pedido(
+            sede=sede or self.sede,
+            detalles=[{"producto": self.producto, "cantidad": 1}],
+            cliente_nombre="Ana",
+            tipo=tipo,
+            direccion_entrega="Carrera 5",
+            entrega_lat=Decimal("3.45"),
+            entrega_lng=Decimal("-76.53"),
+        )
+        Pedido.objects.filter(pk=pedido.pk).update(estado=estado)
+        pedido.refresh_from_db()
+        return pedido
+
+    def _auth(self, usuario):
+        token = LoginSerializer.get_token(usuario).access_token
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _cambiar_estado(self, pedido, estado, usuario=None):
+        return self.client.patch(
+            reverse("pedido_estado", args=[pedido.pk]),
+            {"estado": estado},
+            format="json",
+            **self._auth(usuario or self.repartidor),
+        )
+
+    def _ids(self, usuario=None):
+        response = self.client.get(self.url, **self._auth(usuario or self.repartidor))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return {pedido["id"] for pedido in response.data}
+
+    def test_solo_ve_domicilios_despachables_de_sus_sedes(self):
+        listo = self._pedido()
+        en_camino_sin_asignar = self._pedido(EstadoPedido.EN_CAMINO)
+        self._pedido(EstadoPedido.EN_PREPARACION)
+        self._pedido(tipo=TipoPedido.RECOGER)
+        self._pedido(sede=self.otra_sede)
+
+        self.assertEqual(self._ids(), {listo.pk, en_camino_sin_asignar.pk})
+
+    def test_flujo_de_entrega_asigna_el_pedido_y_termina_en_entregado(self):
+        pedido = self._pedido()
+
+        response = self._cambiar_estado(pedido, "en_camino")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["estados_siguientes"], ["entregado"])
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.repartidor, self.repartidor)
+
+        response = self._cambiar_estado(pedido, "entregado")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, EstadoPedido.ENTREGADO)
+        self.assertEqual(
+            pedido.historial.filter(cambiado_por=self.repartidor).count(), 2
+        )
+
+    def test_no_salta_de_listo_a_entregado(self):
+        pedido = self._pedido()
+
+        response = self._cambiar_estado(pedido, "entregado")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, EstadoPedido.LISTO_DESPACHO)
+        self.assertIsNone(pedido.repartidor)
+
+    def test_pedido_tomado_desaparece_para_otro_repartidor(self):
+        pedido = self._pedido()
+        self._cambiar_estado(pedido, "en_camino")
+
+        self.assertEqual(self._ids(self.colega), set())
+        self.assertEqual(self._ids(), {pedido.pk})
+        response = self._cambiar_estado(pedido, "entregado", self.colega)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, EstadoPedido.EN_CAMINO)
+        self.assertEqual(pedido.repartidor, self.repartidor)
+
+    def test_servicio_rechaza_pedido_tomado_por_otro_durante_la_carrera(self):
+        pedido = self._pedido()
+        cambiar_estado_pedido(pedido.pk, estado="en_camino", usuario=self.repartidor)
+
+        with self.assertRaisesMessage(ValueError, "ya lo tomó otro repartidor"):
+            cambiar_estado_pedido(pedido.pk, estado="entregado", usuario=self.colega)
+
+    def test_no_toca_pedidos_fuera_de_su_alcance(self):
+        casos = (
+            self._pedido(EstadoPedido.RECIBIDO),
+            self._pedido(EstadoPedido.EN_PREPARACION),
+            self._pedido(tipo=TipoPedido.RECOGER),
+            self._pedido(sede=self.otra_sede),
+        )
+        for pedido in casos:
+            for estado in ("en_preparacion", "listo_despacho", "en_camino", "entregado"):
+                with self.subTest(pedido=pedido.pk, estado=estado):
+                    response = self._cambiar_estado(pedido, estado)
+                    self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_sin_sede_asignada_no_ve_pedidos(self):
+        self._pedido()
+        SedeUsuario.objects.filter(usuario=self.repartidor).delete()
+
+        self.assertEqual(self._ids(), set())
+
+    def test_repartidor_no_crea_pedidos(self):
+        response = self.client.post(
+            self.url,
+            {
+                "sede_id": str(self.sede.pk),
+                "detalles": [{"producto_id": str(self.producto.pk), "cantidad": 1}],
+            },
+            format="json",
+            **self._auth(self.repartidor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

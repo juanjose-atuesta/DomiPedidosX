@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.menu.models import Producto
 from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol, User
@@ -36,20 +37,24 @@ class PromocionTests(APITestCase):
         self.repartidor_token = self._token(self.repartidor)
 
         self.sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede principal",
             direccion="Calle 1 # 2-3",
         )
         SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
         self.otra_sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede ajena",
             direccion="Calle 9 # 8-7",
         )
         self.producto_1 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Hamburguesa",
             precio_base=Decimal("12000.00"),
             tiempo_preparacion_min=10,
         )
         self.producto_2 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Papas",
             precio_base=Decimal("5000.00"),
             tiempo_preparacion_min=8,
@@ -59,6 +64,7 @@ class PromocionTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -111,7 +117,7 @@ class PromocionTests(APITestCase):
             "fecha_fin": self.hoy + timedelta(days=1),
         }
         data.update(overrides)
-        return Promocion.objects.create(**data)
+        return Promocion.objects.create(negocio=negocio_prueba(), **data)
 
     def test_admin_y_operador_crean_promocion_porcentaje_y_monto(self):
         casos = (

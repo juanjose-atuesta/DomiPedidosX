@@ -2,6 +2,7 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers
 
 from apps.inventario.models import InventarioSede
@@ -201,6 +202,7 @@ def _validar_venta_en_sede(sede, detalles):
         InventarioSede.objects.filter(
             sede=sede,
             disponible_en_sede=True,
+            producto__negocio_id=sede.negocio_id,
             producto__in=[detalle["producto"] for detalle in detalles],
         ).values_list("producto_id", flat=True)
     )
@@ -228,18 +230,39 @@ def estados_siguientes(pedido):
 
 
 def pedidos_visibles_para(usuario):
-    """Pedidos que puede consultar el usuario: el admin todos, el resto los de sus sedes."""
+    """Pedidos visibles: el cliente los suyos, el admin los de su negocio y el
+    resto los de sus sedes."""
+    if usuario.rol == Rol.CLIENTE:
+        return Pedido.objects.filter(cliente=usuario)
     if usuario.rol == Rol.ADMIN:
-        return Pedido.objects.all()
-    return Pedido.objects.filter(
+        return Pedido.objects.filter(sede__negocio_id=usuario.negocio_id)
+    pedidos = Pedido.objects.filter(
         sede__in=SedeUsuario.objects.filter(usuario=usuario).values("sede")
     )
+    if usuario.rol == Rol.REPARTIDOR:
+        # Solo domicilios: los que ya lleva y los despachables que nadie ha tomado.
+        return pedidos.filter(tipo=TipoPedido.DOMICILIO).filter(
+            Q(repartidor=usuario)
+            | Q(
+                repartidor__isnull=True,
+                estado__in=[EstadoPedido.LISTO_DESPACHO, EstadoPedido.EN_CAMINO],
+            )
+        )
+    return pedidos
 
 
 def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
     """Avanza el estado de un pedido y lo registra en el historial."""
     with transaction.atomic():
         pedido = Pedido.objects.select_for_update().get(pk=pedido_id)
+        campos = ["estado", "actualizado_en"]
+
+        if usuario.rol == Rol.REPARTIDOR:
+            # Bajo el bloqueo: si dos lo toman a la vez, el segundo se rechaza aquí.
+            if pedido.repartidor_id not in (None, usuario.pk):
+                raise ValueError("Este pedido ya lo tomó otro repartidor.")
+            pedido.repartidor = usuario
+            campos.append("repartidor")
 
         if estado not in estados_siguientes(pedido):
             raise ValueError(
@@ -248,7 +271,7 @@ def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
             )
 
         pedido.estado = estado
-        pedido.save(update_fields=["estado", "actualizado_en"])
+        pedido.save(update_fields=campos)
         HistorialEstado.objects.create(
             pedido=pedido,
             estado=estado,

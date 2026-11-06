@@ -7,6 +7,7 @@ from apps.core.permissions import (
     EsCliente,
     EsCocina,
     EsOperador,
+    EsRepartidor,
     exigir_gestion_sede,
     exigir_operacion_sede,
 )
@@ -22,14 +23,15 @@ from .serializers import (
 from .services import cambiar_estado_pedido, crear_pedido, pedidos_visibles_para
 
 PERMISO_CREAR = EsCliente | EsOperador | EsAdmin
-PERMISO_OPERACION = EsCocina | EsOperador | EsAdmin
+PERMISO_OPERACION = EsCocina | EsOperador | EsRepartidor | EsAdmin
+PERMISO_CONSULTA = EsCliente | PERMISO_OPERACION
 
 
 class PedidoListCreateView(APIView):
     def get_permissions(self):
         if self.request.method == "POST":
             return [PERMISO_CREAR()]
-        return [PERMISO_OPERACION()]
+        return [PERMISO_CONSULTA()]
 
     def get(self, request):
         filtros = PedidoFiltroSerializer(data=request.query_params)
@@ -38,11 +40,12 @@ class PedidoListCreateView(APIView):
 
         pedidos = (
             pedidos_visibles_para(request.user)
-            .select_related("sede")
+            .select_related("sede__negocio")
             .prefetch_related("detalles__opciones")
         )
         if "sede" in datos:
-            exigir_operacion_sede(request.user, datos["sede"])
+            if request.user.rol != Rol.CLIENTE:
+                exigir_operacion_sede(request.user, datos["sede"])
             pedidos = pedidos.filter(sede_id=datos["sede"])
         if "estado" in datos:
             pedidos = pedidos.filter(estado__in=datos["estado"])
@@ -88,7 +91,13 @@ class PedidoEstadoView(APIView):
     permission_classes = [PERMISO_OPERACION]
 
     def patch(self, request, pk):
-        pedido = Pedido.objects.filter(pk=pk).first()
+        # Para un repartidor, un pedido que no puede ver es como si no existiera.
+        pedidos = (
+            pedidos_visibles_para(request.user)
+            if request.user.rol == Rol.REPARTIDOR
+            else Pedido.objects
+        )
+        pedido = pedidos.filter(pk=pk).first()
         if pedido is None:
             return Response(
                 {"detail": "Pedido no encontrado."},

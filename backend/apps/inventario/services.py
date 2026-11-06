@@ -19,9 +19,10 @@ def _obtener_sede_activa(sede_id):
     return sede
 
 
-def _obtener_producto_disponible(producto_id):
+def _obtener_producto_disponible(producto_id, sede):
     try:
-        producto = Producto.objects.get(pk=producto_id)
+        # Un producto de otro negocio es como si no existiera.
+        producto = Producto.objects.get(pk=producto_id, negocio_id=sede.negocio_id)
     except (Producto.DoesNotExist, ValueError, TypeError):
         raise ValueError("El producto indicado no existe.")
 
@@ -68,7 +69,7 @@ def asignar_o_actualizar_inventario_sede(
 ):
     with transaction.atomic():
         sede = _obtener_sede_activa(sede_id)
-        producto = _obtener_producto_disponible(producto_id)
+        producto = _obtener_producto_disponible(producto_id, sede)
 
         disponible_en_sede = _booleano(
             disponible_en_sede, "disponible_en_sede"
@@ -112,7 +113,7 @@ def cambiar_disponibilidad_producto_sede(
 ):
     with transaction.atomic():
         sede = _obtener_sede_activa(sede_id)
-        producto = _obtener_producto_disponible(producto_id)
+        producto = _obtener_producto_disponible(producto_id, sede)
 
         try:
             inventario = InventarioSede.objects.select_for_update().get(

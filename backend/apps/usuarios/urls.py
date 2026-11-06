@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     # Develop
     RegistroClienteView,
+    RegistroNegocioView,
     LoginView,
     MeView,
     RegistroPersonalView,
@@ -19,6 +20,7 @@ from .views import (
 urlpatterns = [
     # Rutas de Develop
     path("registro/", RegistroClienteView.as_view(), name="registro_cliente"),
+    path("registro-negocio/", RegistroNegocioView.as_view(), name="registro_negocio"),
     path("login/", LoginView.as_view(), name="login"),
     path("me/", MeView.as_view(), name="usuario_me"),
     path("personal/", RegistroPersonalView.as_view(), name="registro_personal"),

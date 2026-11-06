@@ -5,6 +5,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -32,6 +33,7 @@ class SedeGestionTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -71,6 +73,7 @@ class SedeGestionTests(APITestCase):
 
     def _crear_sede(self, nombre="Sede Norte", activa=True):
         sede = crear_sede(
+            negocio=negocio_prueba(),
             nombre=nombre,
             direccion="Calle 1 # 2-3",
             telefono="3000000000",
@@ -364,6 +367,7 @@ class SedeGestionTests(APITestCase):
             status.HTTP_401_UNAUTHORIZED,
         )
         usuario = User.objects.create_user(
+            negocio=negocio_de_rol(Rol.OPERADOR),
             email="operador.reactivar@example.com",
             password="ClaveSegura#2024",
             nombre="Prueba",
