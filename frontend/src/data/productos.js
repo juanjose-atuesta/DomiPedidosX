@@ -4,9 +4,10 @@ export const PRODUCTOS = [
   {
     id: 1, nombre: "Hamburguesa clásica", categoria: "Hamburguesas", precio: 18000, tiempo: 15,
     descripcion: "Carne de res, queso, lechuga y tomate", disponible: true, activo: true,
-    tamanos: [{ nombre: "Sencilla", extra: 0 }, { nombre: "Doble", extra: 4000 }],
-    adiciones: [{ nombre: "Queso extra", extra: 2000 }, { nombre: "Tocineta", extra: 3000 }],
-    excluibles: [{ nombre: "Cebolla", extra: 0 }, { nombre: "Tomate", extra: 0 }],
+    detalle: "Hamburguesa con 120gr de carne agnus, tocineta, queso americano, pan artesanal, salsa de la casa, tomate, lechuga y cebolla morada.",
+    tamanos: [{ nombre: "Pequeño", extra: 0 }, { nombre: "Mediano", extra: 3000 }, { nombre: "Grande", extra: 6000 }],
+    adiciones: [{ nombre: "Tocineta", extra: 2500 }, { nombre: "Queso extra", extra: 2500 }, { nombre: "Papas", extra: 6000 }],
+    excluibles: [{ nombre: "Cebolla", extra: 0 }, { nombre: "Tomate", extra: 0 }, { nombre: "Lechuga", extra: 0 }, { nombre: "Salsa", extra: 0 }],
   },
   {
     id: 2, nombre: "Papas fritas", categoria: "Acompañamientos", precio: 7000, tiempo: 8,

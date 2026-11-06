@@ -29,11 +29,11 @@ function VersionCelular({ navigate }) {
 function VersionEscritorio({ navigate }) {
   return (
     <main className="grid min-h-screen grid-cols-[minmax(480px,45%)_1fr]">
-      <section className="flex flex-col items-center justify-center bg-fondo px-10">
+      <section className="flex flex-col items-center bg-fondo px-10 pt-[24vh]">
         <h1 className="font-titulo text-[40px] font-bold leading-[48px] text-primario">
           Regístrate o Ingresa
         </h1>
-        <div className="mt-12 flex w-fit flex-col gap-8">
+        <div className="mt-[10vh] flex w-fit flex-col gap-[6vh]">
           <Boton anchoCompleto className="min-w-[300px]" onClick={() => navigate("/registro")}>
             Continuar con Correo Electrónico
           </Boton>
@@ -51,20 +51,24 @@ function VersionEscritorio({ navigate }) {
         </div>
       </section>
 
-      <section className="relative flex flex-col justify-center overflow-hidden bg-primario px-16">
+      <section className="relative flex flex-col overflow-hidden bg-primario px-8">
         <div
           aria-hidden="true"
           className="absolute inset-0 bg-cover bg-center"
           style={{ backgroundImage: fondoRojo ? `url(${fondoRojo})` : undefined }}
         />
-        <div className="relative z-10 flex flex-col items-start gap-8">
-          {logoBlanco && (
-            <img src={logoBlanco} alt="DomiPedidosX" className="h-[170px] w-[170px] object-contain" />
-          )}
-          <p className="max-w-[640px] font-titulo text-6xl font-bold leading-tight text-white">
-            Antójate. Nosotros lo llevamos.
-          </p>
-        </div>
+        {logoBlanco && (
+          <img
+            src={logoBlanco}
+            alt="DomiPedidosX"
+            className="relative z-10 mt-4 h-[170px] w-[170px] self-center object-contain"
+          />
+        )}
+        <p className="relative z-10 my-auto font-titulo text-[clamp(2.5rem,4.4vw,4rem)] font-bold leading-[1.2] text-white">
+          Antójate.
+          <br />
+          Nosotros lo llevamos.
+        </p>
       </section>
     </main>
   )
