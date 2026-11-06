@@ -48,6 +48,14 @@ class User(AbstractBaseUser, PermissionsMixin, ModeloUUID):
     email = models.EmailField(max_length=150, unique=True)
     telefono = models.CharField(max_length=20)
     rol = models.CharField(max_length=20, choices=Rol.choices, default=Rol.CLIENTE)
+    # Personal: el negocio donde trabaja. Los clientes no pertenecen a ninguno.
+    negocio = models.ForeignKey(
+        "negocios.Negocio",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="usuarios",
+    )
     # is_active = False equivale a "desactivar" al usuario (no se borra)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)  # acceso al admin de Django

@@ -36,13 +36,17 @@ HU 2 - Autenticacion JWT
 - POST /api/auth/login/    -> access + refresh
 - POST /api/auth/refresh/  -> nuevo access
 - GET  /api/usuarios/me/   -> datos del usuario autenticado
-- Access token: 15 minutos.
+- Access token: 60 minutos.
 - Refresh token: 7 dias.
 - Header: Authorization: Bearer <access>
 - USER_ID_FIELD = "id" (PK UUID).
 - Login normaliza el email antes de autenticar.
 - Usuarios inactivos no pueden iniciar sesion.
-- Credenciales invalidas devuelven 401 con mensaje generico.
+- Credenciales invalidas devuelven 401 con mensaje generico
+  ("Credenciales incorrectas"). Solo una cuenta desactivada con la clave
+  correcta recibe "Cuenta desactivada".
+- La respuesta del login incluye "user" (id, nombre, apellido, email, telefono
+  y rol) ademas de access y refresh.
 - Claim "rol" incluido como informacion para el cliente, NO para permisos.
 
 HU 3 - Permisos por rol
@@ -77,6 +81,16 @@ Cambios realizados en la HU 4:
 - urls.py: ruta path("personal/", RegistroPersonalView.as_view(),
   name="registro_personal").
 - tests.py: 9 pruebas APITestCase de registro de personal.
+
+HU 4.1 - Listado de usuarios para el modulo administrativo
+- GET /api/usuarios/usuarios/
+- Permiso: EsAdmin (rol admin activo).
+- Devuelve solo usuarios activos, ordenados por nombre y apellido.
+- Cada elemento incluye id, nombre, apellido, email, telefono, rol y sedes
+  asignadas con formato [{"id": "<uuid>", "nombre": "<sede>"}].
+- 401 sin token; 403 si el usuario autenticado no tiene rol admin.
+- Implementado con PersonalSerializer y prefetch_related("sedes_asignadas__sede")
+  en UsuarioListAdminView.
 
 HU 5 - Recuperacion de contrasena desde el correo registrado
 - POST /api/usuarios/password-reset/           (AllowAny)
@@ -273,6 +287,71 @@ Cambios realizados en la HU 11:
   insuficiente con reversion, alerta de stock bajo, producto sin control de
   stock y creacion por cliente.
 
+HU 1.6 - Cambiar rol de usuario
+- PATCH /api/usuarios/usuarios/<uuid:pk>/cambiar-rol/
+- Permiso: EsAdmin (decide por rol en BD, no por is_staff ni por el token).
+- Cuerpo: {"rol": "cliente|operador|cocina|repartidor|admin"}.
+- RolSerializer valida que el rol exista en Rol.choices.
+- Actualiza User.rol, sincroniza is_staff = (rol == "admin") y responde 200 con
+  {"mensaje": "Rol actualizado a <rol>"}.
+- 400 si el rol es invalido; 401 sin token; 403 si el usuario no es admin;
+  404 si el usuario no existe.
+- Estructura de datos afectada (apps/usuarios/models.py - User):
+  id (UUID, PK), nombre, apellido, email, telefono, rol (choices),
+  is_active (bool), is_staff (bool). Esta HU modifica rol e is_staff.
+- Limitaciones: no valida sedes para roles operativos y no impide que un admin
+  cambie su propio rol.
+
+HU 1.9 - Direcciones de entrega con coordenadas
+- GET  /api/usuarios/direcciones/ -> lista direcciones activas del usuario.
+- POST /api/usuarios/direcciones/ -> crea una direccion del usuario autenticado.
+- Permiso: IsAuthenticated (cualquier rol autenticado; no se restringe a cliente).
+- Cuerpo POST:
+  {"alias": "Casa", "direccion_texto": "Calle 5 # 38-20",
+   "detalles": "Torre 2 apto 301", "latitud": 3.4516, "longitud": -76.5320,
+   "es_principal": true}
+- Respuesta POST (201) y elemento del GET:
+  {"id": "<uuid>", "alias": "Casa", "direccion_texto": "Calle 5 # 38-20",
+   "detalles": "Torre 2 apto 301", "latitud": "3.45160000",
+   "longitud": "-76.53200000", "es_principal": true}
+- Estructura de datos (apps/usuarios/models.py - Direccion):
+  id (UUID), cliente (FK User, se toma de request.user), alias (50),
+  direccion_texto (texto), detalles (texto, opcional), latitud (decimal 10,8),
+  longitud (decimal 11,8), es_principal (bool), activa (bool, borrado logico).
+  Restriccion: una sola direccion activa con es_principal=True por cliente.
+- Limite: maximo 5 direcciones activas por usuario; al superarlo responde 400
+  con {"error": "Máximo 5 direcciones permitidas"}.
+- La direccion se crea con cliente=request.user y activa=True; responde 201.
+- 400 por datos invalidos o limite; 401 sin token.
+- PATCH/DELETE /api/usuarios/direcciones/<uuid>/: solo sobre direcciones propias
+  (404 en otro caso); DELETE es borrado logico. Al marcar una direccion como
+  principal, la anterior deja de serlo (guardar_direccion en services.py).
+- Limitaciones: no se valida el rango de latitud/longitud.
+
+HU 1.10 - Desactivar cuenta de cliente
+- PATCH /api/usuarios/usuarios/<uuid:pk>/desactivar/
+- Permiso: EsAdmin.
+- Aplica borrado logico: is_active=False, sin eliminar el registro.
+- No requiere cuerpo; el usuario objetivo se identifica con <uuid:pk>.
+- Responde 200 con {"mensaje": "Cuenta desactivada exitosamente"}.
+- Estructura de datos afectada: User.is_active pasa de True a False. El
+  registro, su historial y sus relaciones (direcciones, pedidos) se conservan.
+- 401 sin token; 403 si el usuario no es admin; 404 si el usuario no existe.
+- Limitaciones: no verifica que el usuario sea cliente, no impide desactivar
+  al propio admin y la logica esta en la vista, no en services.py.
+
+Cambios realizados en las HUs 1.6, 1.9 y 1.10:
+- apps/usuarios/serializers.py: RolSerializer y DireccionSerializer.
+- apps/usuarios/views.py: DesactivarUsuarioView, CambiarRolView y
+  DireccionListCreateView.
+- apps/usuarios/urls.py: rutas usuarios/<uuid:pk>/desactivar/,
+  usuarios/<uuid:pk>/cambiar-rol/ y direcciones/ bajo el prefijo api/usuarios/.
+  Las rutas de usuarios quedan como /api/usuarios/usuarios/<uuid:pk>/... y la
+  de direcciones como /api/usuarios/direcciones/.
+- config/settings.py: access token a 60 minutos y configuracion CORS.
+- Las HUs 1.6 y 1.10 tienen pruebas en GestionUsuariosAdminTests; la HU 1.9
+  sigue sin pruebas propias.
+
 Cambios realizados en las HU 5 y 6:
 - services.py: solicitar_recuperacion_password, confirmar_recuperacion_password
   y actualizar_perfil_usuario.
@@ -294,9 +373,83 @@ Cambios realizados en el modulo de sedes (HU 7):
 - config/urls.py: montaje de api/sedes/.
 - tests.py: 15 pruebas APITestCase (16 subtests) del modulo de sedes.
 
+Ajustes de control de sede y roles (PMV - Entrega 1):
+- apps/core/permissions.py: usuario_puede_gestionar_sede(user, sede) y
+  exigir_gestion_sede(user, sede). El admin gestiona cualquier sede; el operador
+  solo las asignadas en SedeUsuario y nunca recursos globales (sede=None).
+- apps/inventario/views.py: InventarioSedeView aplica el alcance por sede en
+  todos sus metodos (403 si el operador no esta asignado).
+- apps/promociones/views.py: POST/PUT/PATCH/DELETE aplican el alcance. Las
+  promociones globales solo las gestiona el admin y un operador no puede mover
+  una promocion a otra sede ni volverla global. Las lecturas no cambian.
+- POST /api/sedes/<uuid>/reactivar/ (EsAdmin): responde 200 con mensaje y sede;
+  404 si no existe. Reactivar una sede ya activa no produce error.
+- config/settings.py: PASSWORD_RESET_TIMEOUT = 1800 (30 minutos).
+- apps/usuarios/permissions.py: eliminado; no lo usaba ninguna vista.
+- GET /api/auth/modulo-sede/, modulo-cocina/ y modulo-repartidor/: vistas
+  provisionales restauradas (se perdieron en un merge), una por rol, sobre los
+  permisos de apps/core/permissions.py. Devuelven solo {"modulo": "..."}.
+
+Operacion de pedidos (PMV - Entrega 1):
+- GET /api/pedidos/ (cocina/operador/admin): filtros opcionales sede, estado
+  (uno o varios separados por coma) y fecha (AAAA-MM-DD). El admin ve todas las
+  sedes; el resto solo las asignadas en SedeUsuario. Filtrar por una sede ajena
+  responde 403.
+- PATCH /api/pedidos/<id>/estado/ (cocina/operador/admin): cuerpo {"estado",
+  "comentario"}. Registra HistorialEstado. 400 si la transicion no es valida, 403
+  si el pedido es de una sede ajena, 404 si no existe.
+- Transiciones: recibido -> en_preparacion -> listo_despacho; luego entregado
+  (tipo recoger) o en_camino -> entregado (tipo domicilio). La respuesta incluye
+  estados_siguientes para que el frontend no duplique esta regla.
+- POST /api/pedidos/: operador y admin pueden enviar cliente_id (debe ser un
+  cliente activo). El operador solo crea pedidos en sus sedes. Un cliente siempre
+  compra a su nombre y el descuento que envie se ignora.
+- GET /api/pedidos/: el cliente ve solo sus pedidos. El repartidor ve los domicilios
+  de sus sedes que ya lleva o que nadie ha tomado (listo_despacho o en_camino).
+- PATCH estado por repartidor: al cambiar el estado el pedido queda a su nombre; otro
+  repartidor ya no lo ve (404). La respuesta incluye negocio_nombre.
+- Limitaciones: no hay endpoint para cancelar pedidos y el costo_domicilio lo sigue
+  enviando quien crea el pedido.
+
+Ajustes para conectar el frontend:
+- GET /api/menu/productos/?incluir_inactivos=true (solo operador/admin).
+- GET /api/promociones/?incluir_inactivas=true: el admin ve todas y el operador
+  las de sus sedes mas las globales.
+- Producto.disponible es editable por PATCH para poder reactivar productos.
+- GET /api/usuarios/me/ y la respuesta del login incluyen "sedes" (activas).
+
+Carrito y pedidos del operador:
+- GET /api/usuarios/clientes/?q= (operador/admin): clientes activos por nombre,
+  apellido, correo o telefono, con sus direcciones activas. Maximo 20 resultados.
+- POST /api/pedidos/: cantidad de 1 a 10 por linea y el producto debe tener fila
+  de inventario disponible en la sede (400 en otro caso).
+- El inventario se descuenta al CREAR el pedido, dentro de su transaccion. Los
+  cambios de estado no lo modifican.
+- Un ingrediente excluible se guarda en el pedido como "Sin <ingrediente>".
+
+Multi-negocio:
+- apps/negocios: modelo Negocio (nombre, descripcion, logo_url, activo). La fecha
+  de creacion es creado_en. Sede, Categoria, Producto y Promocion tienen negocio
+  obligatorio; User.negocio es opcional: los clientes no pertenecen a ninguno.
+- La migracion negocios.0002 asigna los datos anteriores a "Negocio principal".
+- POST /api/usuarios/registro-negocio/ (AllowAny): crea el negocio y su admin en
+  una transaccion. Como el registro de clientes, no devuelve tokens.
+- Alcance: el rol admin gestiona solo su negocio. Las sedes, categorias, productos,
+  combos, promociones, pedidos e inventario de otro negocio responden 404 o 403, y
+  tampoco se pueden enlazar (400). Personal sin negocio no ve ni crea nada.
+- Publico y clientes ven los negocios activos; GET de categorias, productos y
+  combos acepta ?negocio=<id>. El personal siempre recibe solo el suyo.
+- Promocion.codigo es unico por negocio.
+- GET /api/usuarios/usuarios/, cambiar-rol y desactivar actuan solo sobre personal
+  del propio negocio, y un admin no puede cambiarse ni desactivarse a si mismo.
+- GET /api/usuarios/clientes/: lista por nombre solo a quienes ya compraron en el
+  negocio; a un cliente nuevo se le encuentra con correo o telefono exactos.
+- Limitaciones: ningun rol puede desactivar cuentas de clientes ni negocios (solo
+  el admin de Django), el registro publico no verifica el correo ni limita intentos.
+
 Resultado de pruebas:
     .venv/bin/python -m pytest -q
-    112 passed, 72 subtests passed
+    218 passed, 136 subtests passed
 
     .venv/bin/python manage.py check
     System check identified no issues (0 silenced).
@@ -304,12 +457,6 @@ Resultado de pruebas:
     .venv/bin/python manage.py makemigrations --check --dry-run
     No changes detected
 
-Las 112 pruebas incluyen 15 de HU 1/HU 2, 6 de permisos por rol, 9 de la
-HU 4 (registro de personal), 7 de la HU 5 (recuperacion de contrasena),
-4 de la HU 6 (edicion de perfil), 15 de la HU 7 (gestion de sedes),
-25 de la HU 8/HU 9 de menu y combos (15 del catalogo base y 10 de combos),
-13 de promociones (HU 9), 12 de inventario y catalogo por sede (HU 10) y
-6 de descuento automatico de inventario en pedidos (HU 11).
 
 
 ==============================================================================
@@ -385,7 +532,7 @@ REST_FRAMEWORK = {
 
 # --- JWT ---------------------------------------------------------------------
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "AUTH_HEADER_TYPES": ("Bearer",),
     # El usuario usa UUID como PK; simplejwt lo convierte a str en el claim.

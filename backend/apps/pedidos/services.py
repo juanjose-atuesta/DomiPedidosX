@@ -2,12 +2,19 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers
 
 from apps.inventario.models import InventarioSede
-from apps.menu.models import OpcionProducto, Producto, ProductoCombo
+from apps.menu.models import (
+    OpcionProducto,
+    Producto,
+    ProductoCombo,
+    TipoGrupoOpcion,
+)
 from apps.notificaciones.services import crear_alerta_stock_bajo
-from apps.sedes.models import Sede
+from apps.sedes.models import Sede, SedeUsuario
+from apps.usuarios.models import Rol
 
 from .models import (
     CanalPedido,
@@ -179,6 +186,101 @@ def _normalizar_detalles(detalles):
     return normalizados
 
 
+def _nombre_opcion_en_pedido(opcion):
+    """Un ingrediente excluible se guarda como 'Sin x' para que cocina lo lea bien."""
+    nombre = opcion.nombre
+    if opcion.grupo.tipo != TipoGrupoOpcion.EXCLUIBLE:
+        return nombre
+    if nombre.lower().startswith("sin "):
+        return nombre
+    return f"Sin {nombre.lower()}"
+
+
+def _validar_venta_en_sede(sede, detalles):
+    """Sin fila de inventario disponible, el producto no se vende en la sede."""
+    vendibles = set(
+        InventarioSede.objects.filter(
+            sede=sede,
+            disponible_en_sede=True,
+            producto__negocio_id=sede.negocio_id,
+            producto__in=[detalle["producto"] for detalle in detalles],
+        ).values_list("producto_id", flat=True)
+    )
+    for detalle in detalles:
+        if detalle["producto"].pk not in vendibles:
+            raise ValueError(
+                f"El producto {detalle['producto'].nombre} no se vende en "
+                "esta sede."
+            )
+
+
+def estados_siguientes(pedido):
+    """Estados a los que puede pasar un pedido según su estado y tipo."""
+    if pedido.estado == EstadoPedido.RECIBIDO:
+        return [EstadoPedido.EN_PREPARACION]
+    if pedido.estado == EstadoPedido.EN_PREPARACION:
+        return [EstadoPedido.LISTO_DESPACHO]
+    if pedido.estado == EstadoPedido.LISTO_DESPACHO:
+        if pedido.tipo == TipoPedido.DOMICILIO:
+            return [EstadoPedido.EN_CAMINO]
+        return [EstadoPedido.ENTREGADO]
+    if pedido.estado == EstadoPedido.EN_CAMINO:
+        return [EstadoPedido.ENTREGADO]
+    return []
+
+
+def pedidos_visibles_para(usuario):
+    """Pedidos visibles: el cliente los suyos, el admin los de su negocio y el
+    resto los de sus sedes."""
+    if usuario.rol == Rol.CLIENTE:
+        return Pedido.objects.filter(cliente=usuario)
+    if usuario.rol == Rol.ADMIN:
+        return Pedido.objects.filter(sede__negocio_id=usuario.negocio_id)
+    pedidos = Pedido.objects.filter(
+        sede__in=SedeUsuario.objects.filter(usuario=usuario).values("sede")
+    )
+    if usuario.rol == Rol.REPARTIDOR:
+        # Solo domicilios: los que ya lleva y los despachables que nadie ha tomado.
+        return pedidos.filter(tipo=TipoPedido.DOMICILIO).filter(
+            Q(repartidor=usuario)
+            | Q(
+                repartidor__isnull=True,
+                estado__in=[EstadoPedido.LISTO_DESPACHO, EstadoPedido.EN_CAMINO],
+            )
+        )
+    return pedidos
+
+
+def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
+    """Avanza el estado de un pedido y lo registra en el historial."""
+    with transaction.atomic():
+        pedido = Pedido.objects.select_for_update().get(pk=pedido_id)
+        campos = ["estado", "actualizado_en"]
+
+        if usuario.rol == Rol.REPARTIDOR:
+            # Bajo el bloqueo: si dos lo toman a la vez, el segundo se rechaza aquí.
+            if pedido.repartidor_id not in (None, usuario.pk):
+                raise ValueError("Este pedido ya lo tomó otro repartidor.")
+            pedido.repartidor = usuario
+            campos.append("repartidor")
+
+        if estado not in estados_siguientes(pedido):
+            raise ValueError(
+                f"Un pedido en estado {pedido.get_estado_display()} no puede "
+                f"pasar a {EstadoPedido(estado).label}."
+            )
+
+        pedido.estado = estado
+        pedido.save(update_fields=campos)
+        HistorialEstado.objects.create(
+            pedido=pedido,
+            estado=estado,
+            cambiado_por=usuario,
+            comentario=comentario,
+        )
+        return pedido
+
+
 def crear_pedido(
     *,
     detalles,
@@ -202,6 +304,7 @@ def crear_pedido(
     with transaction.atomic():
         sede = _resolver_sede(sede=sede, sede_id=sede_id)
         detalles = _normalizar_detalles(detalles)
+        _validar_venta_en_sede(sede, detalles)
 
         if canal not in CanalPedido.values:
             raise ValueError("El canal del pedido no es valido.")
@@ -303,7 +406,7 @@ def crear_pedido(
                     DetallePedidoOpcion(
                         detalle=detalle_pedido,
                         opcion=opcion,
-                        nombre_opcion=opcion.nombre,
+                        nombre_opcion=_nombre_opcion_en_pedido(opcion),
                         precio_adicional=opcion.precio_adicional,
                     )
                     for opcion in linea["opciones"]

@@ -27,11 +27,15 @@ class HorarioAtencionSerializer(serializers.ModelSerializer):
 
 class SedeSerializer(serializers.ModelSerializer):
     horarios = HorarioAtencionSerializer(many=True, required=False)
+    negocio_id = serializers.UUIDField(read_only=True)
+    negocio_nombre = serializers.CharField(source="negocio.nombre", read_only=True)
 
     class Meta:
         model = Sede
         fields = (
             "id",
+            "negocio_id",
+            "negocio_nombre",
             "nombre",
             "direccion",
             "telefono",

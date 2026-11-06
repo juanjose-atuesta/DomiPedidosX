@@ -20,7 +20,7 @@ export default function RegistroRestaurante() {
       setError(MENSAJE_CONTRASENA)
       return
     }
-    navigate("/iniciar-sesion")
+    navigate("/login")
   }
 
   return (
@@ -50,7 +50,7 @@ export default function RegistroRestaurante() {
           </h2>
           <p className="mt-1 text-sm text-primario">
             ¿Ya tienes una cuenta?{" "}
-            <Link to="/iniciar-sesion" className="font-semibold underline">
+            <Link to="/login" className="font-semibold underline">
               Haz clic aquí
             </Link>
           </p>

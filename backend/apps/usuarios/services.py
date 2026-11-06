@@ -6,9 +6,10 @@ from django.db import transaction
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 
+from apps.negocios.models import Negocio
 from apps.sedes.models import Sede, SedeUsuario
 
-from .models import PerfilRepartidor, Rol, User
+from .models import Direccion, PerfilRepartidor, Rol, User
 
 ROLES_PERSONAL = (Rol.OPERADOR, Rol.COCINA, Rol.REPARTIDOR, Rol.ADMIN)
 ROLES_OPERATIVOS = (Rol.OPERADOR, Rol.COCINA, Rol.REPARTIDOR)
@@ -30,8 +31,36 @@ def registrar_cliente(
         return usuario
 
 
+def registrar_negocio(
+    *,
+    negocio_nombre: str,
+    negocio_descripcion: str = "",
+    email: str,
+    password: str,
+    nombre: str,
+    apellido: str,
+    telefono: str,
+) -> User:
+    """Crea un negocio y a su administrador responsable, o ninguno de los dos."""
+    with transaction.atomic():
+        negocio = Negocio.objects.create(
+            nombre=negocio_nombre, descripcion=negocio_descripcion
+        )
+        return User.objects.create_user(
+            email=email,
+            password=password,
+            nombre=nombre,
+            apellido=apellido,
+            telefono=telefono,
+            rol=Rol.ADMIN,
+            is_staff=True,
+            negocio=negocio,
+        )
+
+
 def crear_usuario_personal(
     *,
+    negocio,
     email: str,
     password: str,
     nombre: str,
@@ -40,7 +69,7 @@ def crear_usuario_personal(
     rol: str,
     sedes_ids=None,
 ) -> User:
-    """Crea personal del restaurante y lo asigna a una o varias sedes.
+    """Crea personal de un negocio y lo asigna a una o varias de sus sedes.
 
     Los roles operativos (operador, cocina y repartidor) deben tener al menos
     una sede activa. Si el rol es repartidor se crea su PerfilRepartidor.
@@ -57,7 +86,9 @@ def crear_usuario_personal(
                 "Debes asignar al menos una sede para este rol."
             )
 
-        sedes = list(Sede.objects.filter(id__in=sedes_ids, activa=True))
+        sedes = list(
+            Sede.objects.filter(id__in=sedes_ids, activa=True, negocio=negocio)
+        )
         ids_unicos = {str(sede_id) for sede_id in sedes_ids}
         if sedes_ids and len(sedes) != len(ids_unicos):
             raise ValueError("Una o más sedes no existen o están inactivas.")
@@ -70,6 +101,7 @@ def crear_usuario_personal(
             telefono=telefono,
             rol=rol,
             is_staff=(rol == Rol.ADMIN),
+            negocio=negocio,
         )
 
         SedeUsuario.objects.bulk_create(
@@ -151,3 +183,31 @@ def actualizar_perfil_usuario(
         usuario.save(update_fields=campos_actualizados)
 
     return usuario
+
+
+def guardar_direccion(cliente, direccion=None, **datos):
+    """Crea o actualiza una dirección; si queda como principal, reemplaza a la anterior."""
+    with transaction.atomic():
+        if datos.get("es_principal"):
+            anteriores = Direccion.objects.select_for_update().filter(
+                cliente=cliente, activa=True, es_principal=True
+            )
+            if direccion is not None:
+                anteriores = anteriores.exclude(pk=direccion.pk)
+            anteriores.update(es_principal=False)
+
+        if direccion is None:
+            return Direccion.objects.create(cliente=cliente, **datos)
+
+        for campo, valor in datos.items():
+            setattr(direccion, campo, valor)
+        direccion.save(update_fields=list(datos))
+        return direccion
+
+
+def desactivar_direccion(direccion):
+    """Borrado lógico: los pedidos anteriores conservan su copia de la dirección."""
+    direccion.activa = False
+    direccion.es_principal = False
+    direccion.save(update_fields=["activa", "es_principal"])
+    return direccion

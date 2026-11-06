@@ -38,6 +38,7 @@ def validar_horarios(horarios):
 
 def crear_sede(
     *,
+    negocio,
     nombre,
     direccion,
     telefono=None,
@@ -51,6 +52,7 @@ def crear_sede(
 
     with transaction.atomic():
         sede = Sede.objects.create(
+            negocio=negocio,
             nombre=nombre,
             direccion=direccion,
             telefono=telefono or "",
@@ -100,5 +102,13 @@ def desactivar_sede(sede):
     """Aplica borrado lógico: la sede deja de estar activa, no se elimina."""
     with transaction.atomic():
         sede.activa = False
+        sede.save(update_fields=["activa"])
+        return sede
+
+
+def reactivar_sede(sede):
+    """Revierte el borrado lógico: la sede vuelve a estar activa."""
+    with transaction.atomic():
+        sede.activa = True
         sede.save(update_fields=["activa"])
         return sede

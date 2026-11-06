@@ -45,9 +45,12 @@ def _entero_positivo(valor, campo):
     return valor
 
 
-def _obtener_categoria(categoria_id):
+def _obtener_categoria(categoria_id, negocio_id=None):
     try:
-        return Categoria.objects.get(pk=categoria_id)
+        categorias = Categoria.objects.all()
+        if negocio_id is not None:
+            categorias = categorias.filter(negocio_id=negocio_id)
+        return categorias.get(pk=categoria_id)
     except (Categoria.DoesNotExist, ValueError, TypeError):
         raise ValueError("La categoria indicada no existe.")
 
@@ -65,7 +68,7 @@ def _resolver_producto(valor):
     return _obtener_producto(valor)
 
 
-def _normalizar_items_combo(items_combo):
+def _normalizar_items_combo(items_combo, negocio_id):
     if not items_combo:
         raise ValueError("El combo debe incluir al menos un producto.")
 
@@ -80,6 +83,10 @@ def _normalizar_items_combo(items_combo):
         if producto is None:
             producto = item.get("producto_id")
         producto = _resolver_producto(producto)
+
+        # Un producto de otro negocio es como si no existiera.
+        if producto.negocio_id != negocio_id:
+            raise ValueError("El producto indicado no existe.")
 
         if producto.pk in productos_vistos:
             raise ValueError("No se puede repetir un producto en el combo.")
@@ -145,9 +152,10 @@ def _normalizar_opcion(opcion):
     }
 
 
-def crear_categoria(*, nombre, descripcion="", orden=0, activa=True):
+def crear_categoria(*, negocio, nombre, descripcion="", orden=0, activa=True):
     with transaction.atomic():
         return Categoria.objects.create(
+            negocio=negocio,
             nombre=nombre,
             descripcion=descripcion,
             orden=orden,
@@ -174,6 +182,7 @@ def actualizar_categoria(categoria_id, **datos):
 
 def crear_producto(
     *,
+    negocio,
     categoria_id=None,
     nombre,
     descripcion="",
@@ -181,6 +190,7 @@ def crear_producto(
     imagen_url="",
     tiempo_preparacion_min,
     es_combo=False,
+    disponible=True,
 ):
     precio = _decimal_no_negativo(precio_base, "precio_base")
     tiempo = _entero_positivo(
@@ -188,10 +198,11 @@ def crear_producto(
     )
 
     if categoria_id is not None:
-        _obtener_categoria(categoria_id)
+        _obtener_categoria(categoria_id, negocio.pk)
 
     with transaction.atomic():
         return Producto.objects.create(
+            negocio=negocio,
             categoria_id=categoria_id,
             nombre=nombre,
             descripcion=descripcion,
@@ -199,6 +210,7 @@ def crear_producto(
             imagen_url=imagen_url,
             tiempo_preparacion_min=tiempo,
             es_combo=es_combo,
+            disponible=disponible,
         )
 
 
@@ -210,7 +222,7 @@ def actualizar_producto(producto_id, **datos):
         if "categoria_id" in datos:
             categoria_id = datos["categoria_id"]
             if categoria_id is not None:
-                _obtener_categoria(categoria_id)
+                _obtener_categoria(categoria_id, producto.negocio_id)
             producto.categoria_id = categoria_id
             campos_actualizados.append("categoria_id")
 
@@ -249,6 +261,7 @@ def desactivar_producto(producto_id):
 
 def crear_combo(
     *,
+    negocio,
     nombre,
     descripcion="",
     precio_base,
@@ -259,10 +272,11 @@ def crear_combo(
         raise ValueError("El nombre del combo es obligatorio.")
 
     precio = _decimal_no_negativo(precio_base, "precio_base")
-    items_normalizados = _normalizar_items_combo(items_combo)
+    items_normalizados = _normalizar_items_combo(items_combo, negocio.pk)
 
     with transaction.atomic():
         combo = Producto.objects.create(
+            negocio=negocio,
             nombre=nombre,
             descripcion=descripcion,
             precio_base=precio,
@@ -313,7 +327,7 @@ def actualizar_combo(combo_id, **datos):
 
         if "items_combo" in datos and datos["items_combo"] is not None:
             items_normalizados = _normalizar_items_combo(
-                datos["items_combo"]
+                datos["items_combo"], combo.negocio_id
             )
             if any(
                 item["producto"].pk == combo.pk

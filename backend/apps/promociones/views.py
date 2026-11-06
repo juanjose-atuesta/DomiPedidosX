@@ -1,10 +1,17 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import EsAdmin, EsOperador
+from apps.core.permissions import (
+    EsAdmin,
+    EsOperador,
+    exigir_gestion_sede,
+    exigir_negocio,
+)
+from apps.sedes.models import SedeUsuario
 from apps.usuarios.models import Rol
 
 from .models import Promocion
@@ -25,6 +32,16 @@ def _es_gestor(request):
         and usuario.is_authenticated
         and usuario.is_active
         and usuario.rol in (Rol.OPERADOR, Rol.ADMIN)
+    )
+
+
+def _gestiona(request, promocion):
+    """La promoción pertenece al negocio de quien la gestiona."""
+    return (
+        promocion is not None
+        and _es_gestor(request)
+        and bool(request.user.negocio_id)
+        and promocion.negocio_id == request.user.negocio_id
     )
 
 
@@ -61,24 +78,48 @@ class PromocionListCreateView(APIView):
     def get(self, request):
         hoy = timezone.localdate()
         promociones = (
-            Promocion.objects.filter(
+            Promocion.objects.select_related("sede")
+            .prefetch_related("productos_aplicables__producto")
+            .order_by("fecha_fin", "nombre")
+        )
+
+        incluir = request.query_params.get("incluir_inactivas", "")
+        if _es_gestor(request) and incluir.strip().lower() == "true":
+            # Pantalla de gestión: solo su negocio. El operador ve las de sus
+            # sedes y las globales.
+            promociones = promociones.filter(negocio_id=request.user.negocio_id)
+            if request.user.rol == Rol.OPERADOR:
+                promociones = promociones.filter(
+                    Q(sede__isnull=True)
+                    | Q(
+                        sede__in=SedeUsuario.objects.filter(
+                            usuario=request.user
+                        ).values("sede")
+                    )
+                )
+        else:
+            promociones = promociones.filter(
+                negocio__activo=True,
                 activa=True,
                 fecha_inicio__lte=hoy,
                 fecha_fin__gte=hoy,
             )
-            .select_related("sede")
-            .prefetch_related("productos_aplicables__producto")
-            .order_by("fecha_fin", "nombre")
-        )
         return Response(PromocionSerializer(promociones, many=True).data)
 
     def post(self, request):
         serializer = PromocionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # Sin sede la promoción es global: solo el admin puede crearla.
+        exigir_gestion_sede(
+            request.user, serializer.validated_data.get("sede")
+        )
+
         datos = _datos_promocion(serializer.validated_data)
         try:
-            promocion = crear_promocion(**datos)
+            promocion = crear_promocion(
+                negocio=exigir_negocio(request.user), **datos
+            )
         except ValueError as exc:
             return Response(
                 {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
@@ -106,7 +147,7 @@ class PromocionDetailView(APIView):
 
         if (
             not promocion.activa or not _vigente(promocion)
-        ) and not _es_gestor(request):
+        ) and not _gestiona(request, promocion):
             return Response(
                 {"detail": "Promocion no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -122,16 +163,25 @@ class PromocionDetailView(APIView):
 
     def _actualizar(self, request, pk, *, partial):
         promocion = _obtener_promocion(pk)
-        if promocion is None:
+        if not _gestiona(request, promocion):
             return Response(
                 {"detail": "Promocion no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        exigir_gestion_sede(request.user, promocion.sede_id)
+
         serializer = PromocionSerializer(
             promocion, data=request.data, partial=partial
         )
         serializer.is_valid(raise_exception=True)
+
+        # Si cambia de sede, el usuario también debe poder gestionar la nueva
+        # (evita mover una promoción a otra sede o volverla global).
+        if "sede" in serializer.validated_data:
+            exigir_gestion_sede(
+                request.user, serializer.validated_data["sede"]
+            )
 
         datos = _datos_promocion(serializer.validated_data)
         try:
@@ -145,11 +195,13 @@ class PromocionDetailView(APIView):
 
     def delete(self, request, pk):
         promocion = _obtener_promocion(pk)
-        if promocion is None:
+        if not _gestiona(request, promocion):
             return Response(
                 {"detail": "Promocion no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        exigir_gestion_sede(request.user, promocion.sede_id)
 
         desactivar_promocion(pk)
         return Response(

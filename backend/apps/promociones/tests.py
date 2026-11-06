@@ -6,8 +6,9 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.menu.models import Producto
-from apps.sedes.models import Sede
+from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -36,15 +37,24 @@ class PromocionTests(APITestCase):
         self.repartidor_token = self._token(self.repartidor)
 
         self.sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede principal",
             direccion="Calle 1 # 2-3",
         )
+        SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
+        self.otra_sede = Sede.objects.create(
+            negocio=negocio_prueba(),
+            nombre="Sede ajena",
+            direccion="Calle 9 # 8-7",
+        )
         self.producto_1 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Hamburguesa",
             precio_base=Decimal("12000.00"),
             tiempo_preparacion_min=10,
         )
         self.producto_2 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Papas",
             precio_base=Decimal("5000.00"),
             tiempo_preparacion_min=8,
@@ -54,6 +64,7 @@ class PromocionTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -106,7 +117,7 @@ class PromocionTests(APITestCase):
             "fecha_fin": self.hoy + timedelta(days=1),
         }
         data.update(overrides)
-        return Promocion.objects.create(**data)
+        return Promocion.objects.create(negocio=negocio_prueba(), **data)
 
     def test_admin_y_operador_crean_promocion_porcentaje_y_monto(self):
         casos = (
@@ -249,7 +260,7 @@ class PromocionTests(APITestCase):
             self.promocion_list_url,
             payload,
             format="json",
-            **self._auth(self.operador_token),
+            **self._auth(self.admin_token),
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -383,6 +394,84 @@ class PromocionTests(APITestCase):
         self.assertFalse(promocion.activa)
         self.assertTrue(Promocion.objects.filter(pk=promocion.pk).exists())
 
+    def test_operador_no_crea_promocion_global_ni_de_sede_ajena(self):
+        for sede_id in (None, str(self.otra_sede.pk)):
+            with self.subTest(sede_id=sede_id):
+                response = self.client.post(
+                    self.promocion_list_url,
+                    self._payload_promocion(sede_id=sede_id),
+                    format="json",
+                    **self._auth(self.operador_token),
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_403_FORBIDDEN
+                )
+
+        self.assertFalse(Promocion.objects.exists())
+
+    def test_operador_no_edita_ni_desactiva_promocion_global_o_ajena(self):
+        promociones = (
+            self._promocion_orm(nombre="Global"),
+            self._promocion_orm(nombre="Ajena", sede=self.otra_sede),
+        )
+
+        for promocion in promociones:
+            with self.subTest(promocion=promocion.nombre):
+                url = reverse("promocion_detail", args=[promocion.pk])
+
+                response_patch = self.client.patch(
+                    url,
+                    {"nombre": "Cambiada"},
+                    format="json",
+                    **self._auth(self.operador_token),
+                )
+                response_delete = self.client.delete(
+                    url, **self._auth(self.operador_token)
+                )
+
+                self.assertEqual(
+                    response_patch.status_code, status.HTTP_403_FORBIDDEN
+                )
+                self.assertEqual(
+                    response_delete.status_code, status.HTTP_403_FORBIDDEN
+                )
+                nombre_original = promocion.nombre
+                promocion.refresh_from_db()
+                self.assertEqual(promocion.nombre, nombre_original)
+                self.assertTrue(promocion.activa)
+
+    def test_operador_no_mueve_su_promocion_a_otra_sede_ni_la_vuelve_global(self):
+        promocion = self._promocion_orm(sede=self.sede)
+        url = reverse("promocion_detail", args=[promocion.pk])
+
+        for sede_id in (None, str(self.otra_sede.pk)):
+            with self.subTest(sede_id=sede_id):
+                response = self.client.patch(
+                    url,
+                    {"sede_id": sede_id},
+                    format="json",
+                    **self._auth(self.operador_token),
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_403_FORBIDDEN
+                )
+                promocion.refresh_from_db()
+                self.assertEqual(promocion.sede, self.sede)
+
+    def test_admin_gestiona_promocion_global(self):
+        promocion = self._promocion_orm(nombre="Global")
+        url = reverse("promocion_detail", args=[promocion.pk])
+
+        response = self.client.patch(
+            url,
+            {"nombre": "Global editada"},
+            format="json",
+            **self._auth(self.admin_token),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["nombre"], "Global editada")
+
     def test_clientes_repartidores_y_anonimos_no_escriben_promociones(self):
         for token in (self.cliente_token, self.repartidor_token):
             with self.subTest(token=token):
@@ -405,3 +494,50 @@ class PromocionTests(APITestCase):
             response_anonima.status_code, status.HTTP_401_UNAUTHORIZED
         )
         self.assertFalse(Promocion.objects.exists())
+
+    def test_gestion_incluye_inactivas_con_alcance_por_sede(self):
+        propia = self._promocion_orm(
+            nombre="Propia", sede=self.sede, activa=False
+        )
+        global_ = self._promocion_orm(nombre="Global")
+        ajena = self._promocion_orm(nombre="Ajena", sede=self.otra_sede)
+        parametros = {"incluir_inactivas": "true"}
+
+        def ids(response):
+            return {promocion["id"] for promocion in response.data}
+
+        response = self.client.get(
+            self.promocion_list_url, parametros, **self._auth(self.operador_token)
+        )
+        self.assertEqual(ids(response), {str(propia.pk), str(global_.pk)})
+
+        response = self.client.get(
+            self.promocion_list_url, parametros, **self._auth(self.admin_token)
+        )
+        self.assertEqual(
+            ids(response), {str(propia.pk), str(global_.pk), str(ajena.pk)}
+        )
+
+        response = self.client.get(self.promocion_list_url, parametros)
+        self.assertEqual(ids(response), {str(global_.pk), str(ajena.pk)})
+
+    def test_crea_promocion_con_el_payload_del_formulario(self):
+        response = self.client.post(
+            self.promocion_list_url,
+            {
+                "sede_id": str(self.sede.pk),
+                "nombre": "Desde formulario",
+                "descripcion": "",
+                "porcentaje_descuento": None,
+                "monto_descuento": "5000",
+                "pedido_minimo": "0",
+                "cupo_maximo_diario": "10",
+                "fecha_inicio": str(self.hoy),
+                "fecha_fin": str(self.hoy),
+                "productos_ids": [str(self.producto_1.pk)],
+            },
+            format="json",
+            **self._auth(self.operador_token),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)

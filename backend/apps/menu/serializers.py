@@ -84,7 +84,7 @@ class ProductoSerializer(serializers.ModelSerializer):
             "disponible",
             "grupos_opcion",
         )
-        read_only_fields = ("id", "disponible", "grupos_opcion")
+        read_only_fields = ("id", "grupos_opcion")
 
 
 class ProductoCatalogoSedeSerializer(ProductoSerializer):

@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     # Develop
     RegistroClienteView,
+    RegistroNegocioView,
     LoginView,
     MeView,
     RegistroPersonalView,
@@ -9,13 +10,17 @@ from .views import (
     ConfirmarPasswordResetView,
     # Tuyas
     DesactivarUsuarioView,
+    UsuarioListAdminView,
     CambiarRolView,
     DireccionListCreateView,
+    DireccionDetailView,
+    ClienteBusquedaView,
 )
 
 urlpatterns = [
     # Rutas de Develop
     path("registro/", RegistroClienteView.as_view(), name="registro_cliente"),
+    path("registro-negocio/", RegistroNegocioView.as_view(), name="registro_negocio"),
     path("login/", LoginView.as_view(), name="login"),
     path("me/", MeView.as_view(), name="usuario_me"),
     path("personal/", RegistroPersonalView.as_view(), name="registro_personal"),
@@ -30,7 +35,10 @@ urlpatterns = [
         name="confirmar_password_reset",
     ),
     # Tus rutas
+    path("usuarios/", UsuarioListAdminView.as_view(), name="listar-usuarios"),
     path("usuarios/<uuid:pk>/desactivar/", DesactivarUsuarioView.as_view(), name="desactivar-usuario"),
     path("usuarios/<uuid:pk>/cambiar-rol/", CambiarRolView.as_view(), name="cambiar-rol"),
     path("direcciones/", DireccionListCreateView.as_view(), name="direcciones"),
+    path("direcciones/<uuid:pk>/", DireccionDetailView.as_view(), name="direccion_detail"),
+    path("clientes/", ClienteBusquedaView.as_view(), name="clientes_busqueda"),
 ]

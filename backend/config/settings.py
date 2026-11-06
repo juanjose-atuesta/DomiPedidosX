@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # Apps del proyecto
     "apps.core",
+    "apps.negocios",
     "apps.usuarios",
     "apps.sedes",
     "apps.menu",
@@ -121,6 +122,10 @@ USE_TZ = True
 
 # --- Archivos estáticos ------------------------------------------------------
 STATIC_URL = "static/"
+
+# --- Recuperación de contraseña ----------------------------------------------
+# Vida del token de recuperación, en segundos (30 minutos).
+PASSWORD_RESET_TIMEOUT = 1800
 
 # --- Correo ------------------------------------------------------------------
 MAILERS = {

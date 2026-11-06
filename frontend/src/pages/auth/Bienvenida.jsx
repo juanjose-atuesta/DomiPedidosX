@@ -14,7 +14,7 @@ function VersionCelular({ navigate }) {
         <Boton tipo="ambar" className="min-w-[200px]" onClick={() => navigate("/registro")}>
           Registrarme
         </Boton>
-        <Boton tipo="contornoClaro" className="min-w-[200px]" onClick={() => navigate("/iniciar-sesion")}>
+        <Boton tipo="contornoClaro" className="min-w-[200px]" onClick={() => navigate("/login")}>
           Ya tengo cuenta
         </Boton>
       </div>
@@ -44,7 +44,7 @@ function VersionEscritorio({ navigate }) {
             tipo="secundario"
             anchoCompleto
             className="min-w-[300px]"
-            onClick={() => navigate("/iniciar-sesion")}
+            onClick={() => navigate("/login")}
           >
             Ya tengo cuenta
           </Boton>

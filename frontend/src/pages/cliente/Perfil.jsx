@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
 import ClienteLayout from "../../layouts/ClienteLayout"
 import Boton from "../../components/Boton"
 import CampoTexto from "../../components/CampoTexto"
+import MensajeAlerta from "../../components/MensajeAlerta"
 import ModalConfirmacion from "../../components/ModalConfirmacion"
 import { Candado } from "../../components/Iconos"
 import { fondoPerfil, iconoBolsaNaranja } from "../../assets"
+import { useAuth } from "../../context/auth-context"
 
 const FONDO = {
   backgroundImage: `${fondoPerfil ? `url(${fondoPerfil}), ` : ""}linear-gradient(to bottom, #ffffff, #fce3c8)`,
@@ -15,13 +16,15 @@ const FONDO = {
 }
 
 export default function Perfil() {
-  const navigate = useNavigate()
+  const { usuario, actualizarPerfil, logout } = useAuth()
   const entradaFoto = useRef(null)
   const [foto, setFoto] = useState(null)
-  const [nombre, setNombre] = useState("Juan")
-  const [apellido, setApellido] = useState("Pérez")
-  const [telefono, setTelefono] = useState("300 123 4567")
+  const [nombre, setNombre] = useState(usuario?.nombre ?? "")
+  const [apellido, setApellido] = useState(usuario?.apellido ?? "")
+  const [telefono, setTelefono] = useState(usuario?.telefono ?? "")
   const [eliminando, setEliminando] = useState(false)
+  const [mensaje, setMensaje] = useState(null)
+  const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
     return () => {
@@ -34,8 +37,18 @@ export default function Perfil() {
     setFoto(URL.createObjectURL(archivo))
   }
 
-  const guardar = (e) => {
+  const guardar = async (e) => {
     e.preventDefault()
+    setMensaje(null)
+    setGuardando(true)
+    try {
+      await actualizarPerfil({ nombre, apellido, telefono })
+      setMensaje({ tipo: "exito", texto: "Datos actualizados correctamente" })
+    } catch {
+      setMensaje({ tipo: "error", texto: "No pudimos guardar los cambios. Intenta de nuevo." })
+    } finally {
+      setGuardando(false)
+    }
   }
 
   return (
@@ -85,7 +98,12 @@ export default function Perfil() {
           required
         />
         <div className="relative">
-          <CampoTexto etiqueta="Correo electrónico*" defaultValue="juan123@gmail.com" disabled />
+          <CampoTexto
+            etiqueta="Correo electrónico*"
+            value={usuario?.email ?? ""}
+            disabled
+            readOnly
+          />
           <Candado className="absolute bottom-[14px] right-4 h-5 w-5 text-texto-sec" />
         </div>
         <CampoTexto
@@ -96,13 +114,14 @@ export default function Perfil() {
           onChange={(e) => setTelefono(e.target.value)}
           required
         />
-        <Boton type="submit" tipo="ambar" className="w-[249px] self-center">
-          Guardar cambios
+        {mensaje && <MensajeAlerta tipo={mensaje.tipo}>{mensaje.texto}</MensajeAlerta>}
+        <Boton type="submit" tipo="ambar" className="w-[249px] self-center" disabled={guardando}>
+          {guardando ? "Guardando…" : "Guardar cambios"}
         </Boton>
       </form>
 
       <div className="flex flex-col items-center gap-4 pb-4">
-        <Boton tipo="secundario" onClick={() => navigate("/login")}>
+        <Boton tipo="secundario" onClick={logout}>
           Cerrar sesión
         </Boton>
         <button

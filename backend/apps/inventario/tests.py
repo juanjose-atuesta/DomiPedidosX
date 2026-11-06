@@ -4,13 +4,14 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.menu.models import Producto
 from apps.notificaciones.models import (
     CanalNotificacion,
     Notificacion,
     TipoNotificacion,
 )
-from apps.sedes.models import Sede
+from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -34,15 +35,19 @@ class InventarioSedeTests(APITestCase):
         self.cliente_token = self._token(self.cliente)
 
         self.sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Centro",
             direccion="Calle 10 # 20-30",
         )
+        SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
         self.producto = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Hamburguesa",
             precio_base=Decimal("15000.00"),
             tiempo_preparacion_min=15,
         )
         self.producto_2 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Limonada",
             precio_base=Decimal("5000.00"),
             tiempo_preparacion_min=5,
@@ -54,6 +59,7 @@ class InventarioSedeTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -204,11 +210,14 @@ class InventarioSedeTests(APITestCase):
 
     def test_rechaza_sede_inactiva_producto_no_disponible_y_stock_invalido(self):
         sede_inactiva = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede cerrada",
             direccion="Calle 1 # 2-3",
             activa=False,
         )
+        SedeUsuario.objects.create(usuario=self.operador, sede=sede_inactiva)
         producto_no_disponible = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Producto oculto",
             precio_base=Decimal("10000.00"),
             tiempo_preparacion_min=10,
@@ -246,6 +255,7 @@ class InventarioSedeTests(APITestCase):
 
     def test_lista_inventario_filtrado_por_sede(self):
         otra_sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Norte",
             direccion="Calle 4 # 5-6",
         )
@@ -298,6 +308,39 @@ class InventarioSedeTests(APITestCase):
             sede=self.sede, producto=self.producto
         )
         self.assertFalse(inventario.disponible_en_sede)
+
+    def test_operador_no_asignado_recibe_403_en_todos_los_metodos(self):
+        otra_sede = Sede.objects.create(
+            negocio=negocio_prueba(),
+            nombre="Sede Norte",
+            direccion="Calle 4 # 5-6",
+        )
+        inventario = InventarioSede.objects.create(
+            sede=otra_sede,
+            producto=self.producto,
+            stock_actual=10,
+            stock_minimo=5,
+        )
+        url = reverse("inventario_sede", args=[otra_sede.pk])
+        payload = self._payload_inventario(stock_actual=1)
+
+        for metodo in ("get", "post", "put", "patch", "delete"):
+            with self.subTest(metodo=metodo):
+                response = getattr(self.client, metodo)(
+                    url,
+                    payload,
+                    format="json" if metodo != "get" else None,
+                    **self._auth(self.operador_token),
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_403_FORBIDDEN
+                )
+
+        inventario.refresh_from_db()
+        self.assertEqual(inventario.stock_actual, 10)
+
+        response_admin = self.client.get(url, **self._auth(self.admin_token))
+        self.assertEqual(response_admin.status_code, status.HTTP_200_OK)
 
     def test_elimina_inventario_de_un_producto(self):
         InventarioSede.objects.create(

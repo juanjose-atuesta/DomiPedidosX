@@ -5,6 +5,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
 from apps.inventario.models import InventarioSede
 from apps.sedes.models import Sede
 from apps.usuarios.models import Rol, User
@@ -41,9 +42,11 @@ class MenuGestionTests(APITestCase):
         self.repartidor_token = self._token(self.repartidor)
 
         self.categoria = Categoria.objects.create(
+            negocio=negocio_prueba(),
             nombre="Platos principales", orden=1
         )
         self.producto = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Hamburguesa clasica",
             descripcion="Carne, queso y vegetales",
@@ -65,6 +68,7 @@ class MenuGestionTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -361,6 +365,7 @@ class MenuGestionTests(APITestCase):
 
     def test_lista_categorias_solo_incluye_activas(self):
         inactiva = Categoria.objects.create(
+            negocio=negocio_prueba(),
             nombre="Categoria oculta", activa=False
         )
 
@@ -395,6 +400,7 @@ class MenuGestionTests(APITestCase):
 
     def test_lista_productos_solo_incluye_disponibles(self):
         no_disponible = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Producto agotado",
             precio_base=Decimal("10000.00"),
@@ -491,6 +497,66 @@ class MenuGestionTests(APITestCase):
         self.assertEqual(Producto.objects.count(), 1)
 
 
+class ProductoDisponibilidadTests(APITestCase):
+    def setUp(self):
+        self.operador = User.objects.create_user(
+            negocio=negocio_de_rol(Rol.OPERADOR),
+            email="operador.disp@example.com",
+            password="ClaveSegura#2024",
+            nombre="Prueba",
+            apellido="Menu",
+            telefono="3000000000",
+            rol=Rol.OPERADOR,
+        )
+        token = LoginSerializer.get_token(self.operador).access_token
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+        self.producto = Producto.objects.create(
+            negocio=negocio_prueba(),
+            nombre="Oculto",
+            precio_base=Decimal("1000.00"),
+            tiempo_preparacion_min=5,
+            disponible=False,
+        )
+        self.url = reverse("producto_list_create")
+
+    def test_solo_gestores_listan_productos_no_disponibles(self):
+        parametros = {"incluir_inactivos": "true"}
+
+        self.assertEqual(self.client.get(self.url, parametros).data, [])
+        self.assertEqual(self.client.get(self.url, **self.auth).data, [])
+
+        response = self.client.get(self.url, parametros, **self.auth)
+        self.assertEqual(len(response.data), 1)
+
+    def test_gestor_reactiva_producto_con_patch(self):
+        response = self.client.patch(
+            reverse("producto_detail", args=[self.producto.pk]),
+            {"disponible": True},
+            format="json",
+            **self.auth,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.producto.refresh_from_db()
+        self.assertTrue(self.producto.disponible)
+
+    def test_put_sin_disponible_no_lo_cambia(self):
+        response = self.client.put(
+            reverse("producto_detail", args=[self.producto.pk]),
+            {
+                "nombre": "Renombrado",
+                "precio_base": "2000.00",
+                "tiempo_preparacion_min": 5,
+            },
+            format="json",
+            **self.auth,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.producto.refresh_from_db()
+        self.assertFalse(self.producto.disponible)
+
+
 class ComboGestionTests(APITestCase):
     def setUp(self):
         self.admin = self._crear_usuario(Rol.ADMIN, "admin.combo@example.com")
@@ -510,11 +576,13 @@ class ComboGestionTests(APITestCase):
         self.repartidor_token = self._token(self.repartidor)
 
         self.producto_1 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Hamburguesa",
             precio_base=Decimal("12000.00"),
             tiempo_preparacion_min=10,
         )
         self.producto_2 = Producto.objects.create(
+            negocio=negocio_prueba(),
             nombre="Papas",
             precio_base=Decimal("5000.00"),
             tiempo_preparacion_min=8,
@@ -524,6 +592,7 @@ class ComboGestionTests(APITestCase):
 
     def _crear_usuario(self, rol, email):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email,
             password=PASSWORD,
             nombre="Prueba",
@@ -786,35 +855,41 @@ class ComboGestionTests(APITestCase):
 class CatalogoSedeTests(APITestCase):
     def setUp(self):
         self.sede = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Centro",
             direccion="Calle 10 # 20-30",
         )
-        self.categoria = Categoria.objects.create(nombre="Bebidas")
+        self.categoria = Categoria.objects.create(negocio=negocio_prueba(), nombre="Bebidas")
         self.producto_agotado = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Jugo natural",
             precio_base=Decimal("8000.00"),
             tiempo_preparacion_min=5,
         )
         self.producto_disponible = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Cafe",
             precio_base=Decimal("4000.00"),
             tiempo_preparacion_min=3,
         )
         self.producto_oculto_sede = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Te",
             precio_base=Decimal("3000.00"),
             tiempo_preparacion_min=2,
         )
         self.producto_sin_inventario = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Chocolate",
             precio_base=Decimal("6000.00"),
             tiempo_preparacion_min=2,
         )
         self.producto_no_disponible = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Producto retirado",
             precio_base=Decimal("7000.00"),
@@ -878,6 +953,7 @@ class CatalogoSedeTests(APITestCase):
 
     def test_catalogo_no_marca_agotado_si_no_controla_stock(self):
         producto_sin_control = Producto.objects.create(
+            negocio=negocio_prueba(),
             categoria=self.categoria,
             nombre="Producto sin control",
             precio_base=Decimal("9000.00"),
@@ -903,6 +979,7 @@ class CatalogoSedeTests(APITestCase):
 
     def test_catalogo_de_sede_inactiva_o_inexistente_responde_404(self):
         sede_inactiva = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede cerrada",
             direccion="Calle 1 # 2-3",
             activa=False,
