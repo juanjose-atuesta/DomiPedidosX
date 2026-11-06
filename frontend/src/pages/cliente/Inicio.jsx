@@ -38,8 +38,8 @@ export default function Inicio() {
   )
 
   return (
-    <div className="flex min-h-screen justify-center" style={FONDO}>
-      <div className="w-full max-w-[430px] pb-28">
+    <div className="flex h-dvh justify-center pb-[106px]" style={FONDO}>
+      <div className="h-full w-full max-w-[430px] overflow-y-auto pb-4">
         <header className="flex items-center justify-between px-[19px] pt-4">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium tracking-wide text-primario">DomiPedidosX</span>
