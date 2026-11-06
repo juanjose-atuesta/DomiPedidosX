@@ -1,7 +1,7 @@
 ================================================================================
 DOMIPEDIDOSX - DOCUMENTACION DEL MODELO DE DATOS
 ================================================================================
-Base de datos: 23 tablas propias (SQLite en local, PostgreSQL/Supabase en el
+Base de datos: 24 tablas propias (SQLite en local, PostgreSQL/Supabase en el
 entorno desplegado). Los modelos estan en backend/apps/<app>/models.py.
 
 Este documento explica, por cada tabla:
@@ -60,6 +60,7 @@ Tipos usados en este documento
 
 Dominios y tablas
   Configuracion   core_configuracionglobal
+  Negocios        negocios_negocio
   Usuarios        usuarios_user, usuarios_direccion, usuarios_perfilrepartidor
   Sedes           sedes_sede, sedes_sedeusuario, sedes_horarioatencion,
                   sedes_feriado
@@ -72,16 +73,23 @@ Dominios y tablas
                   pedidos_detallepedidoopcion, pedidos_historialestado
   Notificaciones  notificaciones_notificacion
 
+Modelo multi-negocio
+  Varios restaurantes comparten la misma base de datos. negocios_negocio es la
+  raiz del aislamiento: sedes_sede, menu_categoria, menu_producto,
+  promociones_promocion y usuarios_user tienen la FK negocio_id. Las demas tablas
+  pertenecen a un negocio de forma indirecta (por su sede, producto o promocion).
+  Ver tambien docs/diseno/ESQUEMA_BASE_DATOS.md.
+
 Los cuatro "centros" del modelo (tablas a las que apuntan muchas otras)
   usuarios_user   Quien interactua: cliente, operador, cocina, repartidor, admin.
-  sedes_sede      Cada local fisico del restaurante.
+  sedes_sede      Cada local fisico de un negocio.
   menu_producto   Lo que se vende.
   pedidos_pedido  Donde todo converge: un pedido une a un cliente, una sede, una
                   direccion, una zona, un repartidor y una promocion, y de el
                   cuelgan sus productos, su historial y sus notificaciones.
 
 Orden de dependencia (una tabla solo puede apuntar a las de arriba)
-  core -> usuarios -> sedes -> menu -> inventario / cobertura / promociones
+  core -> negocios -> usuarios -> sedes -> menu -> inventario / cobertura / promociones
        -> pedidos -> notificaciones
 
 Cadena de un pedido (util para entender cualquier servicio)
@@ -92,7 +100,7 @@ Cadena de un pedido (util para entender cualquier servicio)
 
 
 ================================================================================
-2. CONFIGURACION
+2. CONFIGURACION Y NEGOCIOS
 ================================================================================
 
 --------------------------------------------------------------------------------
@@ -114,6 +122,27 @@ Relaciones: ninguna. Es una tabla independiente.
 Reglas de BD: la clave no puede repetirse.
 Pendiente del codigo: validar que el valor tenga sentido para cada clave.
 
+--------------------------------------------------------------------------------
+negocios_negocio                    [UUID+fechas]
+--------------------------------------------------------------------------------
+Proposito: el restaurante dueno de sus sedes, menu, promociones y personal. Es el
+inquilino (tenant) del sistema: cada negocio solo ve y administra sus datos. Se
+crea con el registro publico POST /api/usuarios/registro-negocio/.
+
+Atributos
+  nombre       Nombre del restaurante (obligatorio, no es unico).
+  descripcion  Texto opcional.
+  logo_url     URL del logo (opcional).
+  activo       False = sus sedes, menu y promociones dejan de ser publicos.
+
+Relaciones (todas con PROTECT: un negocio con datos no se puede borrar)
+  1-N  sedes_sede              Obligatoria.
+  1-N  menu_categoria          Obligatoria.
+  1-N  menu_producto           Obligatoria.
+  1-N  promociones_promocion   Obligatoria.
+  1-N  usuarios_user           Opcional: el personal tiene negocio; el cliente
+                               tiene NULL porque compra en cualquier negocio.
+
 
 ================================================================================
 3. USUARIOS
@@ -131,6 +160,8 @@ Atributos
   email             Correo. Unico y siempre en minusculas. Es el "usuario" del
                     login y el destino de las notificaciones por correo.
   telefono          Contacto (HU-1.8: el cliente puede editarlo).
+  negocio           FK a negocios_negocio (PROTECT, puede ser NULL). El negocio
+                    donde trabaja el personal. Los clientes tienen NULL.
   rol               Uno de: cliente, operador, cocina, repartidor, admin.
                     Define a que modulos accede cada persona.
   password          Hash de la contrasena (nunca el texto original). Lo maneja
@@ -143,6 +174,7 @@ Atributos
   is_superuser      Permisos totales de Django (lo usa createsuperuser).
 
 Relaciones
+  N-1  negocios_negocio            El personal pertenece a un negocio (opcional).
   1-N  usuarios_direccion          Un cliente tiene varias direcciones guardadas.
   1-1  usuarios_perfilrepartidor   Solo los repartidores tienen perfil.
   N-M  sedes_sede (via sedes_sedeusuario)
@@ -209,10 +241,11 @@ Pendiente del codigo: crear el perfil al crear un usuario con rol repartidor.
 --------------------------------------------------------------------------------
 sedes_sede                          [UUID+fechas]
 --------------------------------------------------------------------------------
-Proposito: cada local fisico del restaurante (HU-8.1 a 8.3). Casi todo el
+Proposito: cada local fisico de un negocio (HU-8.1 a 8.3). Casi todo el
 negocio es "por sede": inventario, capacidad, zonas, pedidos.
 
 Atributos
+  negocio         FK a negocios_negocio (PROTECT, obligatoria). Dueno de la sede.
   nombre          Nombre de la sede.
   direccion       Direccion fisica.
   telefono        Telefono de contacto (opcional).
@@ -222,6 +255,7 @@ Atributos
                   historial (HU-8.3).
 
 Relaciones (es uno de los cuatro centros del modelo)
+  N-1  negocios_negocio          El negocio al que pertenece.
   1-N  sedes_horarioatencion     Sus horarios por dia.
   1-N  sedes_feriado             Sus dias de cierre.
   N-M  usuarios_user (via sedes_sedeusuario)   Su personal.
@@ -245,8 +279,8 @@ Atributos
   sede      FK a sedes_sede (CASCADE).
 Relaciones: une usuarios_user con sedes_sede.
 Reglas de BD: la misma pareja (usuario, sede) no puede repetirse.
-Pendiente del codigo: que las vistas del operador filtren siempre por las sedes
-  asignadas al usuario que hace la peticion.
+Reglas del codigo: el personal solo opera en las sedes asignadas aqui, y solo si
+  pertenecen a su negocio (apps/core/permissions.py).
 
 --------------------------------------------------------------------------------
 sedes_horarioatencion               [id numerico]
@@ -290,21 +324,23 @@ Proposito: agrupar productos para que el cliente los encuentre por tipo
 (HU-2.1): hamburguesas, bebidas, postres...
 
 Atributos
+  negocio      FK a negocios_negocio (PROTECT, obligatoria).
   nombre       Nombre de la categoria.
   descripcion  Texto opcional.
   orden        Posicion en que se muestra en el menu (menor = primero).
   activa       Si se muestra o no.
-Relaciones: 1-N con menu_producto.
+Relaciones: N-1 con negocios_negocio; 1-N con menu_producto.
 
 --------------------------------------------------------------------------------
 menu_producto                       [UUID+fechas]
 --------------------------------------------------------------------------------
 Proposito: lo que se vende (HU-2.2 a 2.4). Los combos tambien son productos
-(es_combo = true). El producto es "global": la informacion comun a todas las
-sedes. Lo que depende de la sede (stock, disponibilidad) esta en
+(es_combo = true). El producto pertenece a un negocio y guarda la informacion
+comun a todas sus sedes. Lo que depende de la sede (stock, disponibilidad) esta en
 inventario_inventariosede.
 
 Atributos
+  negocio                 FK a negocios_negocio (PROTECT, obligatoria).
   categoria               FK a menu_categoria (SET_NULL: si se borra la
                           categoria, el producto sigue existiendo sin categoria).
   nombre                  Nombre del producto.
@@ -320,6 +356,7 @@ Atributos
                           (HU-2.4). No se borra.
 
 Relaciones (otro de los cuatro centros)
+  N-1  negocios_negocio            Pertenece a un negocio.
   N-1  menu_categoria              Pertenece a una categoria.
   1-N  menu_grupoopcion            Sus grupos de personalizacion.
   N-M  si mismo (via menu_productocombo)  Si es combo, que productos contiene.
@@ -482,11 +519,13 @@ Proposito: descuentos con vigencia, condiciones y cupo maximo diario
 (HU-2.7 y 2.8).
 
 Atributos
+  negocio               FK a negocios_negocio (PROTECT, obligatoria).
   sede                  FK a sedes_sede (CASCADE). Puede quedar VACIA: la
-                        promocion aplica a todas las sedes.
+                        promocion aplica a todas las sedes del negocio.
   nombre, descripcion   Que ve el cliente.
-  codigo                Codigo opcional que el cliente escribe (unico). Se guarda
-                        NULL, no texto vacio, cuando no hay codigo.
+  codigo                Codigo opcional que el cliente escribe (unico dentro de
+                        cada negocio). Se guarda NULL, no texto vacio, cuando no
+                        hay codigo.
   porcentaje_descuento  Descuento en % (entre 0 y 100). Usar este O el monto.
   monto_descuento       Descuento en dinero (> 0). Usar este O el porcentaje.
   pedido_minimo         Valor minimo del pedido para poder usarla (condicion).
@@ -494,11 +533,12 @@ Atributos
   fecha_inicio, fecha_fin  Vigencia (fin >= inicio).
   activa                Interruptor manual.
 Relaciones
+  N-1  negocios_negocio            El negocio dueno de la promocion.
   N-1  sedes_sede                  (opcional)
   N-M  menu_producto (via promociones_promocionproducto)
   1-N  pedidos_pedido              Los pedidos que la usaron (SET_NULL).
 Reglas de BD: exactamente UNO entre porcentaje y monto; fechas coherentes;
-  cupo > 0.
+  cupo > 0; la pareja (negocio, codigo) no puede repetirse.
 Importante: el cupo USADO no se guarda aqui. Se calcula contando los pedidos
   del dia con esta promocion que no esten cancelados. El servicio debe hacerlo
   dentro de la misma transaccion que crea el pedido, para que dos pedidos
@@ -680,6 +720,8 @@ Regla de oro: lo que tiene historia no se borra, se desactiva.
 
   PROTECT (no deja borrar mientras tenga hijos)
     sedes_sede, usuarios_user, menu_producto cuando hay pedidos que los usan.
+    negocios_negocio mientras tenga sedes, categorias, productos, promociones o
+    usuarios.
   CASCADE (el hijo desaparece con el padre)
     Direcciones de un usuario; horarios, feriados, zonas, capacidad e inventario
     de una sede; grupos y opciones de un producto; lineas, opciones e historial
@@ -693,7 +735,7 @@ Mecanismos de "desactivar" (en vez de borrar)
   usuarios_user.is_active      usuarios_direccion.activa    sedes_sede.activa
   menu_categoria.activa        menu_producto.disponible     menu_opcionproducto.activa
   cobertura_zonacobertura.activa  cobertura_capacidadfranja.activa
-  promociones_promocion.activa
+  promociones_promocion.activa  negocios_negocio.activo
 
 
 ================================================================================
@@ -705,6 +747,8 @@ coherencia del total). Las reglas que cruzan varias tablas o dependen del tiempo
 las debe garantizar el codigo, de preferencia dentro de transacciones
 (transaction.atomic):
 
+  0. Cada negocio solo accede a sus datos, y no se relacionan recursos de
+     negocios distintos (p. ej. un producto ajeno en un combo).
   1. Un operador solo gestiona los datos de las sedes que tiene asignadas.
   2. Un pedido solo se acepta si la sede esta abierta (horario y feriados).
   3. La direccion debe caer dentro de una zona activa de la sede y el pedido

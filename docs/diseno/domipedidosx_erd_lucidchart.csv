@@ -43,6 +43,7 @@ postgresql,domipedidosx,public,menu_categoria,nombre,4,character varying,100,,,,
 postgresql,domipedidosx,public,menu_categoria,descripcion,5,text,,,,,
 postgresql,domipedidosx,public,menu_categoria,orden,6,integer,,,,,
 postgresql,domipedidosx,public,menu_categoria,activa,7,boolean,,,,,
+postgresql,domipedidosx,public,menu_categoria,negocio_id,8,uuid,,FOREIGN KEY,public,negocios_negocio,id
 postgresql,domipedidosx,public,menu_grupoopcion,creado_en,1,timestamp with time zone,,,,,
 postgresql,domipedidosx,public,menu_grupoopcion,actualizado_en,2,timestamp with time zone,,,,,
 postgresql,domipedidosx,public,menu_grupoopcion,id,3,uuid,,PRIMARY KEY,,,
@@ -71,10 +72,18 @@ postgresql,domipedidosx,public,menu_producto,tiempo_preparacion_min,8,integer,,,
 postgresql,domipedidosx,public,menu_producto,es_combo,9,boolean,,,,,
 postgresql,domipedidosx,public,menu_producto,disponible,10,boolean,,,,,
 postgresql,domipedidosx,public,menu_producto,categoria_id,11,uuid,,FOREIGN KEY,public,menu_categoria,id
+postgresql,domipedidosx,public,menu_producto,negocio_id,12,uuid,,FOREIGN KEY,public,negocios_negocio,id
 postgresql,domipedidosx,public,menu_productocombo,id,1,bigint,,PRIMARY KEY,,,
 postgresql,domipedidosx,public,menu_productocombo,cantidad,2,integer,,,,,
 postgresql,domipedidosx,public,menu_productocombo,combo_id,3,uuid,,FOREIGN KEY,public,menu_producto,id
 postgresql,domipedidosx,public,menu_productocombo,producto_id,4,uuid,,FOREIGN KEY,public,menu_producto,id
+postgresql,domipedidosx,public,negocios_negocio,creado_en,1,timestamp with time zone,,,,,
+postgresql,domipedidosx,public,negocios_negocio,actualizado_en,2,timestamp with time zone,,,,,
+postgresql,domipedidosx,public,negocios_negocio,id,3,uuid,,PRIMARY KEY,,,
+postgresql,domipedidosx,public,negocios_negocio,nombre,4,character varying,150,,,,
+postgresql,domipedidosx,public,negocios_negocio,descripcion,5,text,,,,,
+postgresql,domipedidosx,public,negocios_negocio,logo_url,6,character varying,200,,,,
+postgresql,domipedidosx,public,negocios_negocio,activo,7,boolean,,,,,
 postgresql,domipedidosx,public,notificaciones_notificacion,id,1,uuid,,PRIMARY KEY,,,
 postgresql,domipedidosx,public,notificaciones_notificacion,tipo,2,character varying,30,,,,
 postgresql,domipedidosx,public,notificaciones_notificacion,canal,3,character varying,10,,,,
@@ -147,6 +156,7 @@ postgresql,domipedidosx,public,promociones_promocion,fecha_inicio,11,date,,,,,
 postgresql,domipedidosx,public,promociones_promocion,fecha_fin,12,date,,,,,
 postgresql,domipedidosx,public,promociones_promocion,activa,13,boolean,,,,,
 postgresql,domipedidosx,public,promociones_promocion,sede_id,14,uuid,,FOREIGN KEY,public,sedes_sede,id
+postgresql,domipedidosx,public,promociones_promocion,negocio_id,15,uuid,,FOREIGN KEY,public,negocios_negocio,id
 postgresql,domipedidosx,public,promociones_promocionproducto,id,1,bigint,,PRIMARY KEY,,,
 postgresql,domipedidosx,public,promociones_promocionproducto,producto_id,2,uuid,,FOREIGN KEY,public,menu_producto,id
 postgresql,domipedidosx,public,promociones_promocionproducto,promocion_id,3,uuid,,FOREIGN KEY,public,promociones_promocion,id
@@ -169,6 +179,7 @@ postgresql,domipedidosx,public,sedes_sede,telefono,6,character varying,20,,,,
 postgresql,domipedidosx,public,sedes_sede,latitud,7,numeric,,,,,
 postgresql,domipedidosx,public,sedes_sede,longitud,8,numeric,,,,,
 postgresql,domipedidosx,public,sedes_sede,activa,9,boolean,,,,,
+postgresql,domipedidosx,public,sedes_sede,negocio_id,10,uuid,,FOREIGN KEY,public,negocios_negocio,id
 postgresql,domipedidosx,public,sedes_sedeusuario,id,1,bigint,,PRIMARY KEY,,,
 postgresql,domipedidosx,public,sedes_sedeusuario,sede_id,2,uuid,,FOREIGN KEY,public,sedes_sede,id
 postgresql,domipedidosx,public,sedes_sedeusuario,usuario_id,3,uuid,,FOREIGN KEY,public,usuarios_user,id
@@ -202,3 +213,4 @@ postgresql,domipedidosx,public,usuarios_user,telefono,10,character varying,20,,,
 postgresql,domipedidosx,public,usuarios_user,rol,11,character varying,20,,,,
 postgresql,domipedidosx,public,usuarios_user,is_active,12,boolean,,,,,
 postgresql,domipedidosx,public,usuarios_user,is_staff,13,boolean,,,,,
+postgresql,domipedidosx,public,usuarios_user,negocio_id,14,uuid,,FOREIGN KEY,public,negocios_negocio,id
