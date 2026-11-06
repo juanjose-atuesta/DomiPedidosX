@@ -18,6 +18,8 @@ import IniciarSesion from "./pages/auth/IniciarSesion"
 import RecuperarContrasena from "./pages/auth/RecuperarContrasena"
 import Registro from "./pages/auth/Registro"
 import Inicio from "./pages/cliente/Inicio"
+import Producto from "./pages/cliente/Producto"
+import RegistroRestaurante from "./pages/auth/RegistroRestaurante"
 
 export default function App() {
   return (
@@ -46,6 +48,8 @@ export default function App() {
       <Route path="/recuperar-contrasena" element={<RecuperarContrasena />} />
       <Route path="/registro" element={<Registro />} />
       <Route path="/cliente" element={<Inicio />} />
+      <Route path="/cliente/producto/:id" element={<Producto />} />
+      <Route path="/registro-restaurante" element={<RegistroRestaurante />} />
       <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
     </Routes>
   )
