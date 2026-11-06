@@ -181,6 +181,7 @@ def crear_producto(
     imagen_url="",
     tiempo_preparacion_min,
     es_combo=False,
+    disponible=True,
 ):
     precio = _decimal_no_negativo(precio_base, "precio_base")
     tiempo = _entero_positivo(
@@ -199,6 +200,7 @@ def crear_producto(
             imagen_url=imagen_url,
             tiempo_preparacion_min=tiempo,
             es_combo=es_combo,
+            disponible=disponible,
         )
 
 

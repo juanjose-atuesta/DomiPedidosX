@@ -6,9 +6,12 @@ export default function CampoSelect({
   placeholder = "Seleccionar",
   className = "",
   required = true,
+  value,
   ...props
 }) {
   const id = useId()
+  const controlado = value !== undefined
+
   return (
     <div className={`flex flex-col gap-1 ${className}`}>
       {etiqueta && (
@@ -18,7 +21,7 @@ export default function CampoSelect({
       )}
       <select
         id={id}
-        defaultValue=""
+        {...(controlado ? { value } : { defaultValue: "" })}
         required={required}
         className="h-11 w-full rounded-lg border border-borde bg-white px-4 text-base text-texto outline-none focus:border-primario focus:ring-1 focus:ring-primario invalid:text-deshabilitado"
         {...props}
@@ -26,11 +29,19 @@ export default function CampoSelect({
         <option value="" disabled>
           {placeholder}
         </option>
-        {opciones.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
+        {opciones.map((opcion, indice) => {
+          const esObjeto = opcion && typeof opcion === "object"
+          const valor = esObjeto ? (opcion.valor ?? opcion.value) : opcion
+          const texto = esObjeto
+            ? (opcion.etiqueta ?? opcion.label ?? valor)
+            : opcion
+
+          return (
+            <option key={`${valor}-${indice}`} value={valor}>
+              {texto}
+            </option>
+          )
+        })}
       </select>
     </div>
   )

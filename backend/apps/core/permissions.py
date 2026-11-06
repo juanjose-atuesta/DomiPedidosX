@@ -1,5 +1,7 @@
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
+from apps.sedes.models import SedeUsuario
 from apps.usuarios.models import Rol
 
 
@@ -42,6 +44,44 @@ EsOperador = RolPermitido(Rol.OPERADOR)
 EsCocina = RolPermitido(Rol.COCINA)
 EsRepartidor = RolPermitido(Rol.REPARTIDOR)
 EsAdmin = RolPermitido(Rol.ADMIN)
+
+
+def usuario_opera_en_sede(user, sede):
+    """Indica si el usuario trabaja en una sede.
+
+    `sede` puede ser una instancia de Sede, su id o None (recurso global). El
+    admin opera en cualquiera; el resto solo en las que tiene asignadas en
+    SedeUsuario y nunca sobre recursos globales. El rol lo valida cada vista.
+    """
+    if not user.is_authenticated or not user.is_active:
+        return False
+    if user.rol == Rol.ADMIN:
+        return True
+    if sede is None:
+        return False
+    return SedeUsuario.objects.filter(usuario=user, sede=sede).exists()
+
+
+def usuario_puede_gestionar_sede(user, sede):
+    """Indica si el usuario puede gestionar el catálogo operativo de una sede.
+
+    Solo admin y operador gestionan inventario y promociones.
+    """
+    if user.rol not in (Rol.ADMIN, Rol.OPERADOR):
+        return False
+    return usuario_opera_en_sede(user, sede)
+
+
+def exigir_gestion_sede(user, sede):
+    """Lanza 403 si el usuario no puede gestionar la sede indicada."""
+    if not usuario_puede_gestionar_sede(user, sede):
+        raise PermissionDenied("No tienes permiso para gestionar esta sede.")
+
+
+def exigir_operacion_sede(user, sede):
+    """Lanza 403 si el usuario no trabaja en la sede indicada."""
+    if not usuario_opera_en_sede(user, sede):
+        raise PermissionDenied("No tienes permiso para operar en esta sede.")
 
 
 # Matriz de ejemplo (cada vista declara explícitamente sus roles; el admin NO

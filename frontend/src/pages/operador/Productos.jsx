@@ -1,32 +1,91 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
 import AdminLayout from "../../layouts/AdminLayout"
 import Boton from "../../components/Boton"
 import ChipCategoria from "../../components/ChipCategoria"
 import Interruptor from "../../components/Interruptor"
+import MensajeAlerta from "../../components/MensajeAlerta"
 import ModalConfirmacion from "../../components/ModalConfirmacion"
-import { CATEGORIAS, PRODUCTOS } from "../../data/productos"
+import {
+  cambiarDisponibilidadProducto,
+  desactivarProducto,
+  listarCategorias,
+  listarProductos,
+} from "../../api/menu"
+import { mensajeDeError } from "../../utils/errores"
+import { moneda } from "../../utils/formato"
 
 const COLUMNAS = "grid grid-cols-[1.4fr_1.1fr_0.7fr_0.7fr_120px_250px] items-center gap-4"
 const TITULOS = ["Producto", "Categoría", "Precio", "Tiempo", "Disponible", "Acciones"]
+const TODAS = "todas"
 
 export default function Productos() {
   const navigate = useNavigate()
-  const [productos, setProductos] = useState(PRODUCTOS)
-  const [categoria, setCategoria] = useState("Todas")
+  const location = useLocation()
+  const [productos, setProductos] = useState([])
+  const [categorias, setCategorias] = useState([])
+  const [categoria, setCategoria] = useState(TODAS)
+  const [cargando, setCargando] = useState(true)
+  const [error, setError] = useState("")
+  const [mensaje, setMensaje] = useState(location.state?.mensaje ?? "")
   const [aDesactivar, setADesactivar] = useState(null)
+  const [procesando, setProcesando] = useState(false)
+
+  useEffect(() => {
+    let vigente = true
+
+    Promise.all([listarProductos(true), listarCategorias()])
+      .then(([datosProductos, datosCategorias]) => {
+        if (!vigente) return
+        setProductos(datosProductos)
+        setCategorias(datosCategorias)
+      })
+      .catch((err) => {
+        if (vigente) setError(mensajeDeError(err, "No se pudieron cargar los productos."))
+      })
+      .finally(() => {
+        if (vigente) setCargando(false)
+      })
+
+    return () => {
+      vigente = false
+    }
+  }, [])
 
   const visibles =
-    categoria === "Todas" ? productos : productos.filter((p) => p.categoria === categoria)
+    categoria === TODAS ? productos : productos.filter((p) => p.categoria_id === categoria)
 
-  const cambiarDisponible = (id, valor) =>
-    setProductos((ps) => ps.map((p) => (p.id === id ? { ...p, disponible: valor } : p)))
+  const nombreCategoria = (id) => categorias.find((c) => c.id === id)?.nombre ?? "Sin categoría"
 
-  const desactivar = () => {
-    setProductos((ps) =>
-      ps.map((p) => (p.id === aDesactivar.id ? { ...p, activo: false, disponible: false } : p)),
-    )
-    setADesactivar(null)
+  const marcarDisponible = (id, disponible) =>
+    setProductos((ps) => ps.map((p) => (p.id === id ? { ...p, disponible } : p)))
+
+  const cambiarDisponible = async (id, valor) => {
+    setError("")
+    setMensaje("")
+    try {
+      await cambiarDisponibilidadProducto(id, valor)
+      marcarDisponible(id, valor)
+    } catch (err) {
+      setError(mensajeDeError(err, "No se pudo cambiar la disponibilidad."))
+    }
+  }
+
+  const desactivar = async () => {
+    if (!aDesactivar || procesando) return
+    setProcesando(true)
+    setError("")
+    setMensaje("")
+    try {
+      await desactivarProducto(aDesactivar.id)
+      marcarDisponible(aDesactivar.id, false)
+      setMensaje("Producto desactivado correctamente.")
+    } catch (err) {
+      setError(mensajeDeError(err, "No se pudo desactivar el producto."))
+    } finally {
+      setADesactivar(null)
+      setProcesando(false)
+    }
   }
 
   return (
@@ -34,10 +93,16 @@ export default function Productos() {
       titulo="Productos"
       accion={<Boton onClick={() => navigate("/operador/productos/nuevo")}>Nuevo producto</Boton>}
     >
+      {mensaje && <MensajeAlerta tipo="exito">{mensaje}</MensajeAlerta>}
+      {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+
       <div className="flex flex-wrap gap-2">
-        {["Todas", ...CATEGORIAS].map((c) => (
-          <ChipCategoria key={c} activo={categoria === c} onClick={() => setCategoria(c)}>
-            {c}
+        <ChipCategoria activo={categoria === TODAS} onClick={() => setCategoria(TODAS)}>
+          Todas
+        </ChipCategoria>
+        {categorias.map((c) => (
+          <ChipCategoria key={c.id} activo={categoria === c.id} onClick={() => setCategoria(c.id)}>
+            {c.nombre}
           </ChipCategoria>
         ))}
       </div>
@@ -50,23 +115,23 @@ export default function Productos() {
             ))}
           </div>
 
-          {visibles.length === 0 && (
+          {cargando && <p className="py-6 text-sm text-texto-sec">Cargando productos…</p>}
+          {!cargando && visibles.length === 0 && (
             <p className="py-6 text-sm text-texto-sec">No hay productos en esta categoría</p>
           )}
 
           {visibles.map((p) => (
             <div
               key={p.id}
-              className={`${COLUMNAS} py-3 text-sm leading-5 text-texto ${p.activo ? "" : "opacity-60"}`}
+              className={`${COLUMNAS} py-3 text-sm leading-5 text-texto ${p.disponible ? "" : "opacity-60"}`}
             >
               <p>{p.nombre}</p>
-              <p>{p.categoria}</p>
-              <p>${p.precio.toLocaleString("es-CO")}</p>
-              <p>{p.tiempo} min</p>
+              <p>{nombreCategoria(p.categoria_id)}</p>
+              <p>{moneda(p.precio_base)}</p>
+              <p>{p.tiempo_preparacion_min} min</p>
               <div>
                 <Interruptor
                   activo={p.disponible}
-                  disabled={!p.activo}
                   etiqueta={`Disponible: ${p.nombre}`}
                   onChange={(valor) => cambiarDisponible(p.id, valor)}
                 />
@@ -75,7 +140,7 @@ export default function Productos() {
                 <Boton tipo="secundario" onClick={() => navigate(`/operador/productos/${p.id}/editar`)}>
                   Editar
                 </Boton>
-                <Boton tipo="secundario" disabled={!p.activo} onClick={() => setADesactivar(p)}>
+                <Boton tipo="secundario" disabled={!p.disponible} onClick={() => setADesactivar(p)}>
                   Desactivar
                 </Boton>
               </div>
@@ -88,9 +153,11 @@ export default function Productos() {
         abierto={Boolean(aDesactivar)}
         titulo="¿Desactivar producto?"
         texto="Dejará de aparecer en el menú del cliente. Los pedidos anteriores conservan el producto."
-        textoConfirmar="Desactivar"
+        textoConfirmar={procesando ? "Desactivando…" : "Desactivar"}
         onConfirmar={desactivar}
-        onCancelar={() => setADesactivar(null)}
+        onCancelar={() => {
+          if (!procesando) setADesactivar(null)
+        }}
       />
     </AdminLayout>
   )

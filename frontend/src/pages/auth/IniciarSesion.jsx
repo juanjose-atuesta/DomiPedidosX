@@ -1,23 +1,39 @@
 import { useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { Link, useLocation, useNavigate } from "react-router-dom"
 import AuthLayout from "../../layouts/AuthLayout"
 import Boton from "../../components/Boton"
 import CampoTexto from "../../components/CampoTexto"
 import MensajeAlerta from "../../components/MensajeAlerta"
+import { useAuth } from "../../context/auth-context"
+import { rutaInicio } from "../../utils/roles"
 
 export default function IniciarSesion() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const { login } = useAuth()
   const [identificador, setIdentificador] = useState("")
   const [contrasena, setContrasena] = useState("")
   const [error, setError] = useState("")
+  const [enviando, setEnviando] = useState(false)
 
-  const ingresar = (e) => {
+  const ingresar = async (e) => {
     e.preventDefault()
-    if (contrasena.length < 8) {
-      setError("Correo o contraseña incorrectos")
-      return
+    setError("")
+    setEnviando(true)
+
+    try {
+      const perfil = await login({
+        email: identificador.trim(),
+        password: contrasena,
+      })
+      const desde = location.state?.desde?.pathname
+      navigate(desde ?? rutaInicio(perfil.rol), { replace: true })
+    } catch (err) {
+      const detalle = err.response?.data?.detail
+      setError(detalle || "No pudimos iniciar sesión. Verifica tus datos e intenta de nuevo.")
+    } finally {
+      setEnviando(false)
     }
-    navigate("/cliente")
   }
 
   return (
@@ -29,7 +45,8 @@ export default function IniciarSesion() {
       <form onSubmit={ingresar} className="mt-12 flex flex-col gap-6">
         <CampoTexto
           fondo="oscuro"
-          etiqueta="Correo o Teléfono"
+          etiqueta="Correo electrónico"
+          type="email"
           placeholder="Escribe aquí"
           value={identificador}
           onChange={(e) => {
@@ -50,9 +67,17 @@ export default function IniciarSesion() {
           }}
           required
         />
+        {location.state?.mensaje && !error && (
+          <MensajeAlerta tipo="info">{location.state.mensaje}</MensajeAlerta>
+        )}
         {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
-        <Boton type="submit" tipo="ambar" className="min-w-[200px] self-center">
-          Iniciar Sesión
+        <Boton
+          type="submit"
+          tipo="ambar"
+          className="min-w-[200px] self-center"
+          disabled={enviando}
+        >
+          {enviando ? "Ingresando…" : "Iniciar Sesión"}
         </Boton>
       </form>
 

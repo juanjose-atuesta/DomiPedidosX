@@ -1,4 +1,5 @@
 from datetime import time
+from uuid import uuid4
 
 from django.urls import reverse
 from rest_framework import status
@@ -335,6 +336,57 @@ class SedeGestionTests(APITestCase):
         self.assertTrue(Sede.objects.filter(pk=pk).exists())
         sede.refresh_from_db()
         self.assertFalse(sede.activa)
+
+    def test_admin_reactiva_sede(self):
+        sede = self._crear_sede()
+        sede.activa = False
+        sede.save(update_fields=["activa"])
+
+        response = self.client.post(
+            reverse("sede_reactivar", args=[sede.pk]),
+            **self._auth(self.admin_token),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("mensaje", response.data)
+        self.assertTrue(response.data["sede"]["activa"])
+        sede.refresh_from_db()
+        self.assertTrue(sede.activa)
+
+    def test_reactivar_sede_exige_admin_y_sede_existente(self):
+        sede = self._crear_sede()
+        sede.activa = False
+        sede.save(update_fields=["activa"])
+        url = reverse("sede_reactivar", args=[sede.pk])
+
+        self.assertEqual(
+            self.client.post(url).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        usuario = User.objects.create_user(
+            email="operador.reactivar@example.com",
+            password="ClaveSegura#2024",
+            nombre="Prueba",
+            apellido="Sede",
+            telefono="3000000000",
+            rol=Rol.OPERADOR,
+        )
+        self.assertEqual(
+            self.client.post(
+                url, **self._auth(self._token(usuario))
+            ).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        sede.refresh_from_db()
+        self.assertFalse(sede.activa)
+
+        self.assertEqual(
+            self.client.post(
+                reverse("sede_reactivar", args=[uuid4()]),
+                **self._auth(self.admin_token),
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
 
     def test_no_admin_recibe_403_en_escritura(self):
         sede = self._crear_sede()

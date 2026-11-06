@@ -10,7 +10,7 @@ from apps.notificaciones.models import (
     Notificacion,
     TipoNotificacion,
 )
-from apps.sedes.models import Sede
+from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -37,6 +37,7 @@ class InventarioSedeTests(APITestCase):
             nombre="Sede Centro",
             direccion="Calle 10 # 20-30",
         )
+        SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
         self.producto = Producto.objects.create(
             nombre="Hamburguesa",
             precio_base=Decimal("15000.00"),
@@ -208,6 +209,7 @@ class InventarioSedeTests(APITestCase):
             direccion="Calle 1 # 2-3",
             activa=False,
         )
+        SedeUsuario.objects.create(usuario=self.operador, sede=sede_inactiva)
         producto_no_disponible = Producto.objects.create(
             nombre="Producto oculto",
             precio_base=Decimal("10000.00"),
@@ -298,6 +300,38 @@ class InventarioSedeTests(APITestCase):
             sede=self.sede, producto=self.producto
         )
         self.assertFalse(inventario.disponible_en_sede)
+
+    def test_operador_no_asignado_recibe_403_en_todos_los_metodos(self):
+        otra_sede = Sede.objects.create(
+            nombre="Sede Norte",
+            direccion="Calle 4 # 5-6",
+        )
+        inventario = InventarioSede.objects.create(
+            sede=otra_sede,
+            producto=self.producto,
+            stock_actual=10,
+            stock_minimo=5,
+        )
+        url = reverse("inventario_sede", args=[otra_sede.pk])
+        payload = self._payload_inventario(stock_actual=1)
+
+        for metodo in ("get", "post", "put", "patch", "delete"):
+            with self.subTest(metodo=metodo):
+                response = getattr(self.client, metodo)(
+                    url,
+                    payload,
+                    format="json" if metodo != "get" else None,
+                    **self._auth(self.operador_token),
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_403_FORBIDDEN
+                )
+
+        inventario.refresh_from_db()
+        self.assertEqual(inventario.stock_actual, 10)
+
+        response_admin = self.client.get(url, **self._auth(self.admin_token))
+        self.assertEqual(response_admin.status_code, status.HTTP_200_OK)
 
     def test_elimina_inventario_de_un_producto(self):
         InventarioSede.objects.create(

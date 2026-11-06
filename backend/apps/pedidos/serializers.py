@@ -2,15 +2,20 @@ from rest_framework import serializers
 
 from apps.menu.models import Producto
 from apps.sedes.models import Sede
+from apps.usuarios.models import Rol, User
 
 from .models import (
     CanalPedido,
     DetallePedido,
     DetallePedidoOpcion,
+    EstadoPedido,
     MetodoPago,
     Pedido,
     TipoPedido,
 )
+from .services import estados_siguientes
+
+CANTIDAD_MAXIMA_POR_LINEA = 10
 
 
 class DetallePedidoInputSerializer(serializers.Serializer):
@@ -18,7 +23,9 @@ class DetallePedidoInputSerializer(serializers.Serializer):
         source="producto",
         queryset=Producto.objects.all(),
     )
-    cantidad = serializers.IntegerField(min_value=1)
+    cantidad = serializers.IntegerField(
+        min_value=1, max_value=CANTIDAD_MAXIMA_POR_LINEA
+    )
     notas_producto = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -35,6 +42,13 @@ class PedidoCreateSerializer(serializers.Serializer):
     sede_id = serializers.PrimaryKeyRelatedField(
         source="sede",
         queryset=Sede.objects.filter(activa=True),
+    )
+    # Solo lo usan operador y admin; si lo envía un cliente se ignora.
+    cliente_id = serializers.PrimaryKeyRelatedField(
+        source="cliente",
+        queryset=User.objects.filter(rol=Rol.CLIENTE, is_active=True),
+        required=False,
+        allow_null=True,
     )
     cliente_nombre = serializers.CharField(
         max_length=200,
@@ -117,6 +131,24 @@ class PedidoCreateSerializer(serializers.Serializer):
         return attrs
 
 
+class PedidoFiltroSerializer(serializers.Serializer):
+    sede = serializers.UUIDField(required=False)
+    # Uno o varios estados separados por coma: ?estado=recibido,en_preparacion
+    estado = serializers.CharField(required=False)
+    fecha = serializers.DateField(required=False)
+
+    def validate_estado(self, value):
+        estados = [estado.strip() for estado in value.split(",") if estado.strip()]
+        if not estados or any(e not in EstadoPedido.values for e in estados):
+            raise serializers.ValidationError("El estado no es valido.")
+        return estados
+
+
+class CambioEstadoSerializer(serializers.Serializer):
+    estado = serializers.ChoiceField(choices=EstadoPedido.choices)
+    comentario = serializers.CharField(required=False, allow_blank=True)
+
+
 class DetallePedidoOpcionSalidaSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetallePedidoOpcion
@@ -145,8 +177,13 @@ class DetallePedidoSalidaSerializer(serializers.ModelSerializer):
 
 class PedidoSerializer(serializers.ModelSerializer):
     sede_id = serializers.UUIDField(read_only=True)
+    sede_nombre = serializers.CharField(source="sede.nombre", read_only=True)
     cliente_id = serializers.UUIDField(read_only=True, allow_null=True)
     detalles = DetallePedidoSalidaSerializer(many=True, read_only=True)
+    estados_siguientes = serializers.SerializerMethodField()
+
+    def get_estados_siguientes(self, pedido):
+        return estados_siguientes(pedido)
 
     class Meta:
         model = Pedido
@@ -159,7 +196,10 @@ class PedidoSerializer(serializers.ModelSerializer):
             "canal",
             "tipo",
             "sede_id",
+            "sede_nombre",
+            "direccion_entrega",
             "estado",
+            "estados_siguientes",
             "metodo_pago",
             "subtotal",
             "costo_domicilio",

@@ -8,7 +8,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 
 from apps.sedes.models import Sede, SedeUsuario
 
-from .models import PerfilRepartidor, Rol, User
+from .models import Direccion, PerfilRepartidor, Rol, User
 
 ROLES_PERSONAL = (Rol.OPERADOR, Rol.COCINA, Rol.REPARTIDOR, Rol.ADMIN)
 ROLES_OPERATIVOS = (Rol.OPERADOR, Rol.COCINA, Rol.REPARTIDOR)
@@ -151,3 +151,31 @@ def actualizar_perfil_usuario(
         usuario.save(update_fields=campos_actualizados)
 
     return usuario
+
+
+def guardar_direccion(cliente, direccion=None, **datos):
+    """Crea o actualiza una dirección; si queda como principal, reemplaza a la anterior."""
+    with transaction.atomic():
+        if datos.get("es_principal"):
+            anteriores = Direccion.objects.select_for_update().filter(
+                cliente=cliente, activa=True, es_principal=True
+            )
+            if direccion is not None:
+                anteriores = anteriores.exclude(pk=direccion.pk)
+            anteriores.update(es_principal=False)
+
+        if direccion is None:
+            return Direccion.objects.create(cliente=cliente, **datos)
+
+        for campo, valor in datos.items():
+            setattr(direccion, campo, valor)
+        direccion.save(update_fields=list(datos))
+        return direccion
+
+
+def desactivar_direccion(direccion):
+    """Borrado lógico: los pedidos anteriores conservan su copia de la dirección."""
+    direccion.activa = False
+    direccion.es_principal = False
+    direccion.save(update_fields=["activa", "es_principal"])
+    return direccion

@@ -8,7 +8,12 @@ from apps.usuarios.models import Rol
 
 from .models import Sede
 from .serializers import SedeSerializer
-from .services import actualizar_sede, crear_sede, desactivar_sede
+from .services import (
+    actualizar_sede,
+    crear_sede,
+    desactivar_sede,
+    reactivar_sede,
+)
 
 MENSAJE_SEDE_NO_ENCONTRADA = "Sede no encontrada."
 
@@ -134,3 +139,23 @@ class SedeDetailView(APIView):
 
         desactivar_sede(sede)
         return Response({"mensaje": "Sede desactivada correctamente."})
+
+
+class SedeReactivarView(APIView):
+    permission_classes = [EsAdmin]
+
+    def post(self, request, pk):
+        sede = _obtener_sede(pk)
+        if sede is None:
+            return Response(
+                {"detail": MENSAJE_SEDE_NO_ENCONTRADA},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        sede = reactivar_sede(sede)
+        return Response(
+            {
+                "mensaje": "Sede reactivada correctamente.",
+                "sede": SedeSerializer(sede).data,
+            }
+        )

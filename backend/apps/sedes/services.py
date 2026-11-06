@@ -102,3 +102,11 @@ def desactivar_sede(sede):
         sede.activa = False
         sede.save(update_fields=["activa"])
         return sede
+
+
+def reactivar_sede(sede):
+    """Revierte el borrado lógico: la sede vuelve a estar activa."""
+    with transaction.atomic():
+        sede.activa = True
+        sede.save(update_fields=["activa"])
+        return sede

@@ -172,11 +172,13 @@ class ProductoListCreateView(APIView):
 
     def get(self, request):
         productos = (
-            Producto.objects.filter(disponible=True)
-            .select_related("categoria")
+            Producto.objects.select_related("categoria")
             .prefetch_related("grupos_opcion__opciones")
             .order_by("nombre")
         )
+        incluir = request.query_params.get("incluir_inactivos", "")
+        if not (_es_gestor(request) and incluir.strip().lower() == "true"):
+            productos = productos.filter(disponible=True)
         return Response(ProductoSerializer(productos, many=True).data)
 
     def post(self, request):

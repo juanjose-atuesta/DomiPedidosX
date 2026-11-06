@@ -9,8 +9,11 @@ from .views import (
     ConfirmarPasswordResetView,
     # Tuyas
     DesactivarUsuarioView,
+    UsuarioListAdminView,
     CambiarRolView,
     DireccionListCreateView,
+    DireccionDetailView,
+    ClienteBusquedaView,
 )
 
 urlpatterns = [
@@ -30,7 +33,10 @@ urlpatterns = [
         name="confirmar_password_reset",
     ),
     # Tus rutas
+    path("usuarios/", UsuarioListAdminView.as_view(), name="listar-usuarios"),
     path("usuarios/<uuid:pk>/desactivar/", DesactivarUsuarioView.as_view(), name="desactivar-usuario"),
     path("usuarios/<uuid:pk>/cambiar-rol/", CambiarRolView.as_view(), name="cambiar-rol"),
     path("direcciones/", DireccionListCreateView.as_view(), name="direcciones"),
+    path("direcciones/<uuid:pk>/", DireccionDetailView.as_view(), name="direccion_detail"),
+    path("clientes/", ClienteBusquedaView.as_view(), name="clientes_busqueda"),
 ]

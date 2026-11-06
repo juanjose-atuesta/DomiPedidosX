@@ -3,7 +3,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import EsAdmin, EsOperador
+from apps.core.permissions import EsAdmin, EsOperador, exigir_gestion_sede
 from apps.sedes.models import Sede
 
 from .models import InventarioSede
@@ -37,6 +37,12 @@ def _obtener_inventario(sede_id, producto_id):
 class InventarioSedeView(APIView):
     def get_permissions(self):
         return [PERMISO_GESTION()]
+
+    def initial(self, request, *args, **kwargs):
+        # Primero autentica y valida el rol; luego el alcance por sede, que
+        # aplica a todos los métodos de la vista.
+        super().initial(request, *args, **kwargs)
+        exigir_gestion_sede(request.user, kwargs["sede_id"])
 
     def get(self, request, sede_id):
         sede = _obtener_sede(sede_id)

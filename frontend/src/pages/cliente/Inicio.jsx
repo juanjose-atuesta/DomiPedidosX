@@ -1,41 +1,119 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import ChipCategoria from "../../components/ChipCategoria"
+import MensajeAlerta from "../../components/MensajeAlerta"
 import TarjetaProducto from "../../components/TarjetaProducto"
 import { Lupa, UbicacionPin } from "../../components/Iconos"
 import BarraInferior from "../../components/BarraInferior"
 import { iconoBolsaRoja } from "../../assets"
-import { CATEGORIAS, PRODUCTOS } from "../../data/productos"
+import { listarCategorias, obtenerCatalogoSede } from "../../api/menu"
+import { listarSedes } from "../../api/sedes"
+import { mensajeDeError } from "../../utils/errores"
 
 const FONDO = {
   background: "linear-gradient(to top, #fff8f1 84%, #9d0208 127.76%)",
   backgroundAttachment: "fixed",
 }
 
-const SECCIONES = [
-  { titulo: "Los más vendidos", icono: "🏅", ids: [1, 2, 4, 3] },
-  { titulo: "Promociones", icono: "🔥", ids: [1, 4] },
-  { titulo: "Combos deli", icono: "😋", ids: [1, 2, 3] },
-]
+const CLAVE_SEDE = "domipedidos.sede"
+const TODO = "todo"
+
+function leerSedeGuardada() {
+  try {
+    return localStorage.getItem(CLAVE_SEDE) ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function guardarSede(id) {
+  try {
+    localStorage.setItem(CLAVE_SEDE, id)
+  } catch {
+    // Sin almacenamiento la sede solo se recuerda durante esta visita.
+  }
+}
 
 export default function Inicio() {
   const navigate = useNavigate()
-  const [categoria, setCategoria] = useState("Todo")
+  const [sedes, setSedes] = useState([])
+  const [categorias, setCategorias] = useState([])
+  const [sedeElegida, setSedeElegida] = useState(leerSedeGuardada)
+  const [productos, setProductos] = useState([])
+  const [cargadoDe, setCargadoDe] = useState(null)
+  const [sedesListas, setSedesListas] = useState(false)
+  const [categoria, setCategoria] = useState(TODO)
   const [busqueda, setBusqueda] = useState("")
+  const [error, setError] = useState("")
 
+  const sedeId = sedes.some((s) => s.id === sedeElegida) ? sedeElegida : (sedes[0]?.id ?? "")
+
+  useEffect(() => {
+    let vigente = true
+
+    Promise.all([listarSedes(), listarCategorias()])
+      .then(([datosSedes, datosCategorias]) => {
+        if (!vigente) return
+        setSedes(datosSedes)
+        setCategorias(datosCategorias)
+      })
+      .catch((err) => {
+        if (vigente) setError(mensajeDeError(err, "No se pudo cargar el menú."))
+      })
+      .finally(() => {
+        if (vigente) setSedesListas(true)
+      })
+
+    return () => {
+      vigente = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!sedeId) return undefined
+    let vigente = true
+
+    obtenerCatalogoSede(sedeId)
+      .then((datos) => {
+        if (!vigente) return
+        setProductos(datos)
+        setError("")
+      })
+      .catch((err) => {
+        if (vigente) setError(mensajeDeError(err, "No se pudo cargar el menú de esta sede."))
+      })
+      .finally(() => {
+        if (vigente) setCargadoDe(sedeId)
+      })
+
+    return () => {
+      vigente = false
+    }
+  }, [sedeId])
+
+  const cargando = !sedesListas || (Boolean(sedeId) && cargadoDe !== sedeId)
   const texto = busqueda.trim().toLowerCase()
+  const filtrados = productos
+    .filter((p) => categoria === TODO || p.categoria_id === categoria)
+    .filter((p) => p.nombre.toLowerCase().includes(texto))
 
-  const filtrar = (ids) =>
-    ids
-      .map((id) => PRODUCTOS.find((p) => p.id === id))
-      .filter(Boolean)
-      .filter((p) => p.activo)
-      .filter((p) => categoria === "Todo" || p.categoria === categoria)
-      .filter((p) => p.nombre.toLowerCase().includes(texto))
+  const secciones = [
+    { id: "combos", titulo: "Combos deli", productos: filtrados.filter((p) => p.es_combo) },
+    ...categorias.map((c) => ({
+      id: c.id,
+      titulo: c.nombre,
+      productos: filtrados.filter((p) => !p.es_combo && p.categoria_id === c.id),
+    })),
+    {
+      id: "otros",
+      titulo: "Otros",
+      productos: filtrados.filter(
+        (p) => !p.es_combo && !categorias.some((c) => c.id === p.categoria_id),
+      ),
+    },
+  ].filter((s) => s.productos.length > 0)
 
-  const secciones = SECCIONES.map((s) => ({ ...s, productos: filtrar(s.ids) })).filter(
-    (s) => s.productos.length > 0,
-  )
+  const verProducto = (id) => navigate(`/cliente/producto/${id}?sede=${sedeId}`)
 
   return (
     <div className="flex h-dvh justify-center pb-[106px]" style={FONDO}>
@@ -55,6 +133,27 @@ export default function Inicio() {
           </button>
         </header>
 
+        {sedes.length > 0 && (
+          <label className="mx-6 mt-4 flex h-9 items-center gap-2 rounded-full bg-fondo px-4 text-sm text-primario">
+            <span className="shrink-0 font-medium">Sede:</span>
+            <select
+              aria-label="Sede"
+              value={sedeId}
+              onChange={(e) => {
+                setSedeElegida(e.target.value)
+                guardarSede(e.target.value)
+              }}
+              className="w-full bg-transparent text-sm text-texto outline-none"
+            >
+              {sedes.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <label className="mx-6 mt-4 flex h-9 items-center gap-2 rounded-full bg-fondo px-4">
           <Lupa className="h-5 w-5 shrink-0 text-primario" />
           <input
@@ -68,50 +167,53 @@ export default function Inicio() {
         </label>
 
         <div className="mt-8 flex gap-[14px] overflow-x-auto px-4 pb-1">
-          {["Todo", ...CATEGORIAS].map((c) => (
-            <ChipCategoria key={c} activo={categoria === c} onClick={() => setCategoria(c)}>
-              {c}
+          <ChipCategoria activo={categoria === TODO} onClick={() => setCategoria(TODO)}>
+            Todo
+          </ChipCategoria>
+          {categorias.map((c) => (
+            <ChipCategoria key={c.id} activo={categoria === c.id} onClick={() => setCategoria(c.id)}>
+              {c.nombre}
             </ChipCategoria>
           ))}
         </div>
 
         <main className="mt-6 flex flex-col gap-6 px-4">
-          {secciones.length === 0 && (
+          {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+          {cargando && !error && (
+            <p className="py-10 text-center text-sm text-texto-sec">Cargando menú…</p>
+          )}
+          {!cargando && !error && secciones.length === 0 && (
             <p className="py-10 text-center text-sm text-texto-sec">No encontramos productos</p>
           )}
 
-          {secciones.map((s) => (
-            <section key={s.titulo} className="flex flex-col gap-2">
-              <h2 className="flex items-center gap-1 text-base font-semibold text-black">
-                <span aria-hidden="true">{s.icono}</span>
-                {s.titulo}
-              </h2>
-              <div className="flex gap-[21px] overflow-x-auto pb-2">
-                {s.productos.map((p) => {
-                  const agotado = !p.disponible
-                  return (
+          {!cargando &&
+            secciones.map((s) => (
+              <section key={s.id} className="flex flex-col gap-2">
+                <h2 className="text-base font-semibold text-black">{s.titulo}</h2>
+                <div className="flex gap-[21px] overflow-x-auto pb-2">
+                  {s.productos.map((p) => (
                     <div
                       key={p.id}
-                      className={`w-[250px] shrink-0 ${agotado ? "" : "cursor-pointer"}`}
-                      onClick={agotado ? undefined : () => navigate(`/cliente/producto/${p.id}`)}
+                      className={`w-[250px] shrink-0 ${p.agotado ? "" : "cursor-pointer"}`}
+                      onClick={p.agotado ? undefined : () => verProducto(p.id)}
                     >
                       <TarjetaProducto
                         nombre={p.nombre}
                         descripcion={p.descripcion}
-                        tiempo={p.tiempo}
-                        precio={p.precio}
-                        agotado={agotado}
+                        tiempo={p.tiempo_preparacion_min}
+                        precio={Number(p.precio_base)}
+                        imagen={p.imagen_url}
+                        agotado={p.agotado}
                         onAgregar={(e) => {
                           e.stopPropagation()
-                          navigate(`/cliente/producto/${p.id}`)
+                          verProducto(p.id)
                         }}
                       />
                     </div>
-                  )
-                })}
-              </div>
-            </section>
-          ))}
+                  ))}
+                </div>
+              </section>
+            ))}
         </main>
       </div>
 

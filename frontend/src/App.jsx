@@ -9,6 +9,11 @@ import FormularioProducto from "./pages/operador/FormularioProducto"
 import Promociones from "./pages/operador/Promociones"
 import FormularioPromocion from "./pages/operador/FormularioPromocion"
 import Inventario from "./pages/operador/Inventario"
+import Pedidos from "./pages/operador/Pedidos"
+import NuevoPedido from "./pages/operador/NuevoPedido"
+import Carrito from "./pages/cliente/Carrito"
+import PedidoRecibido from "./pages/cliente/PedidoRecibido"
+import TableroCocina from "./pages/cocina/TableroCocina"
 import AccesoDenegado from "./pages/AccesoDenegado"
 import Direcciones from "./pages/cliente/Direcciones"
 import Perfil from "./pages/cliente/Perfil"
@@ -20,37 +25,243 @@ import Registro from "./pages/auth/Registro"
 import Inicio from "./pages/cliente/Inicio"
 import Producto from "./pages/cliente/Producto"
 import RegistroRestaurante from "./pages/auth/RegistroRestaurante"
+import RutaProtegida from "./routes/RutaProtegida"
+import RedirigirInicio from "./routes/RedirigirInicio"
+
+const ADMIN = ["admin"]
+const OPERADOR = ["operador", "admin"]
+const CLIENTE = ["cliente"]
+const COCINA = ["cocina", "operador", "admin"]
+const REPARTIDOR = ["repartidor"]
+
+function EnConstruccion() {
+  return <p className="p-8 text-texto">Página en construcción</p>
+}
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/admin/usuarios" replace />} />
-      <Route path="/admin/usuarios" element={<Usuarios />} />
-      <Route path="/admin/usuarios/nueva" element={<CrearCuentaPersonal />} />
-      <Route path="/admin/sedes" element={<Sedes />} />
-      <Route path="/admin/sedes/nueva" element={<FormularioSede />} />
-      <Route path="/admin/sedes/:id/editar" element={<FormularioSede />} />
-      <Route path="/operador/categorias" element={<Categorias />} />
-      <Route path="/operador/productos" element={<Productos />} />
-      <Route path="/operador/productos/nuevo" element={<FormularioProducto />} />
-      <Route path="/operador/productos/:id/editar" element={<FormularioProducto />} />
-      <Route path="/operador/promociones" element={<Promociones />} />
-      <Route path="/operador/promociones/nueva" element={<FormularioPromocion />} />
-      <Route path="/operador/promociones/:id/editar" element={<FormularioPromocion />} />
-      <Route path="/operador/inventario" element={<Inventario />} />
-      <Route path="/acceso-denegado" element={<AccesoDenegado />} />
-      <Route path="/cliente/direcciones" element={<Direcciones />} />
-      <Route path="/cliente/perfil" element={<Perfil />} />
-      <Route path="/cliente/direcciones/nueva" element={<AgregarDireccion />} />
-      <Route path="/cliente/direcciones/:id/editar" element={<AgregarDireccion />} />
+      <Route path="/" element={<RedirigirInicio />} />
+
+      {/* Autenticación */}
       <Route path="/login" element={<Bienvenida />} />
       <Route path="/iniciar-sesion" element={<IniciarSesion />} />
       <Route path="/recuperar-contrasena" element={<RecuperarContrasena />} />
       <Route path="/registro" element={<Registro />} />
-      <Route path="/cliente" element={<Inicio />} />
-      <Route path="/cliente/producto/:id" element={<Producto />} />
       <Route path="/registro-restaurante" element={<RegistroRestaurante />} />
-      <Route path="*" element={<p className="p-8 text-texto">Página en construcción</p>} />
+
+      {/* Administración */}
+      <Route
+        path="/admin/usuarios"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <Usuarios />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/usuarios/nueva"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <CrearCuentaPersonal />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/sedes"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <Sedes />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/sedes/nueva"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <FormularioSede />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/sedes/:id/editar"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <FormularioSede />
+          </RutaProtegida>
+        }
+      />
+
+      {/* Operación de sede */}
+      <Route
+        path="/operador/pedidos"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <Pedidos />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/pedidos/nuevo"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <NuevoPedido />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/categorias"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <Categorias />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/productos"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <Productos />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/productos/nuevo"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <FormularioProducto />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/productos/:id/editar"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <FormularioProducto />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/promociones"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <Promociones />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/promociones/nueva"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <FormularioPromocion />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/promociones/:id/editar"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <FormularioPromocion />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/inventario"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <Inventario />
+          </RutaProtegida>
+        }
+      />
+
+      {/* Cliente */}
+      <Route
+        path="/cliente"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <Inicio />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/producto/:id"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <Producto />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/carrito"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <Carrito />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/pedido-recibido"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <PedidoRecibido />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/direcciones"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <Direcciones />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/direcciones/nueva"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <AgregarDireccion />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/direcciones/:id/editar"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <AgregarDireccion />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/cliente/perfil"
+        element={
+          <RutaProtegida roles={CLIENTE}>
+            <Perfil />
+          </RutaProtegida>
+        }
+      />
+
+      {/* Cocina */}
+      <Route
+        path="/cocina"
+        element={
+          <RutaProtegida roles={COCINA}>
+            <TableroCocina />
+          </RutaProtegida>
+        }
+      />
+
+      {/* Módulos pendientes de maquetar */}
+      <Route
+        path="/repartidor"
+        element={
+          <RutaProtegida roles={REPARTIDOR}>
+            <EnConstruccion />
+          </RutaProtegida>
+        }
+      />
+
+      <Route path="/acceso-denegado" element={<AccesoDenegado />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }

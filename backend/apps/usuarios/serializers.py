@@ -10,6 +10,8 @@ from .services import ROLES_OPERATIVOS, ROLES_PERSONAL
 
 
 class RegistroClienteSerializer(serializers.ModelSerializer):
+    # Declarado aparte para que el mensaje de correo repetido sea el de validate_email.
+    email = serializers.EmailField(max_length=150)
     password = serializers.CharField(write_only=True, min_length=8)
     password_confirmacion = serializers.CharField(write_only=True)
 
@@ -55,7 +57,7 @@ class RegistroClienteSerializer(serializers.ModelSerializer):
 
 class LoginSerializer(TokenObtainPairSerializer):
     default_error_messages = {
-        "no_active_account": "Correo o contraseña incorrectos.",
+        "no_active_account": "Credenciales incorrectas",
     }
 
     @classmethod
@@ -65,18 +67,44 @@ class LoginSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        attrs[self.username_field] = attrs[self.username_field].strip().lower()
-        return super().validate(attrs)
+        email = attrs[self.username_field].strip().lower()
+        attrs[self.username_field] = email
+        try:
+            data = super().validate(attrs)
+        except AuthenticationFailed:
+            # Solo quien conoce la clave puede saber que la cuenta está
+            # desactivada; en cualquier otro caso el mensaje es el genérico.
+            inactivo = User.objects.filter(email=email, is_active=False).first()
+            if inactivo and inactivo.check_password(attrs["password"]):
+                raise AuthenticationFailed(
+                    "Cuenta desactivada", "cuenta_desactivada"
+                )
+            raise
+
+        data["user"] = UsuarioSerializer(self.user).data
+        return data
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
+    sedes = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ("id", "nombre", "apellido", "email", "telefono", "rol")
+        fields = ("id", "nombre", "apellido", "email", "telefono", "rol", "sedes")
         read_only_fields = fields
+
+    def get_sedes(self, obj):
+        # Sedes activas donde trabaja; define el alcance en las pantallas de personal.
+        return [
+            {"id": str(sede_usuario.sede_id), "nombre": sede_usuario.sede.nombre}
+            for sede_usuario in obj.sedes_asignadas.select_related("sede").filter(
+                sede__activa=True
+            )
+        ]
 
 
 class RegistroPersonalSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(max_length=150)
     password = serializers.CharField(write_only=True, min_length=8)
     password_confirmacion = serializers.CharField(write_only=True)
     rol = serializers.ChoiceField(choices=ROLES_PERSONAL)
@@ -187,4 +215,17 @@ class DireccionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Direccion
         fields = ['id', 'alias', 'direccion_texto', 'detalles', 'latitud', 'longitud', 'es_principal']
-        
+
+
+class ClienteBusquedaSerializer(serializers.ModelSerializer):
+    """Datos de un cliente para que el personal registre un pedido a su nombre."""
+
+    direcciones = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ("id", "nombre", "apellido", "email", "telefono", "direcciones")
+        read_only_fields = fields
+
+    def get_direcciones(self, obj):
+        return DireccionSerializer(obj.direcciones_activas, many=True).data

@@ -491,6 +491,64 @@ class MenuGestionTests(APITestCase):
         self.assertEqual(Producto.objects.count(), 1)
 
 
+class ProductoDisponibilidadTests(APITestCase):
+    def setUp(self):
+        self.operador = User.objects.create_user(
+            email="operador.disp@example.com",
+            password="ClaveSegura#2024",
+            nombre="Prueba",
+            apellido="Menu",
+            telefono="3000000000",
+            rol=Rol.OPERADOR,
+        )
+        token = LoginSerializer.get_token(self.operador).access_token
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+        self.producto = Producto.objects.create(
+            nombre="Oculto",
+            precio_base=Decimal("1000.00"),
+            tiempo_preparacion_min=5,
+            disponible=False,
+        )
+        self.url = reverse("producto_list_create")
+
+    def test_solo_gestores_listan_productos_no_disponibles(self):
+        parametros = {"incluir_inactivos": "true"}
+
+        self.assertEqual(self.client.get(self.url, parametros).data, [])
+        self.assertEqual(self.client.get(self.url, **self.auth).data, [])
+
+        response = self.client.get(self.url, parametros, **self.auth)
+        self.assertEqual(len(response.data), 1)
+
+    def test_gestor_reactiva_producto_con_patch(self):
+        response = self.client.patch(
+            reverse("producto_detail", args=[self.producto.pk]),
+            {"disponible": True},
+            format="json",
+            **self.auth,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.producto.refresh_from_db()
+        self.assertTrue(self.producto.disponible)
+
+    def test_put_sin_disponible_no_lo_cambia(self):
+        response = self.client.put(
+            reverse("producto_detail", args=[self.producto.pk]),
+            {
+                "nombre": "Renombrado",
+                "precio_base": "2000.00",
+                "tiempo_preparacion_min": 5,
+            },
+            format="json",
+            **self.auth,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.producto.refresh_from_db()
+        self.assertFalse(self.producto.disponible)
+
+
 class ComboGestionTests(APITestCase):
     def setUp(self):
         self.admin = self._crear_usuario(Rol.ADMIN, "admin.combo@example.com")
