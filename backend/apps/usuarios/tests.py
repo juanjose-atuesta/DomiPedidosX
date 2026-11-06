@@ -1,7 +1,6 @@
 import re
 from uuid import uuid4
 
-<<<<<<< HEAD
 """Pruebas del login con JWT (criterios de aceptación de la HU)."""
 
 import pytest
@@ -128,7 +127,8 @@ def test_cliente_no_accede_a_modulos_del_personal():
 def test_sin_token_no_accede():
     """Sin sesión iniciada el módulo responde 401 (no autenticado)."""
     assert APIClient().get(reverse("modulo-cocina")).status_code == 401
-=======
+
+
 from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
@@ -774,4 +774,3 @@ class ActualizarPerfilTests(APITestCase):
         response = self._patch({"telefono": "3000000000"})
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
->>>>>>> develop
