@@ -83,7 +83,15 @@ erDiagram
     }
     sedes_feriado {
         bigint id PK
+        uuid negocio_id FK
+    }
+    sedes_feriado_sedes {
+        bigint id PK
+        bigint feriado_id FK
         uuid sede_id FK
+    }
+    notificaciones_configuracioncorreos {
+        uuid negocio_id PK, FK
     }
     sedes_horarioatencion {
         bigint id PK
@@ -141,7 +149,10 @@ erDiagram
     sedes_sede |o--o{ notificaciones_notificacion : "sede_id"
     sedes_sede ||--o{ pedidos_pedido : "sede_id"
     sedes_sede |o--o{ promociones_promocion : "sede_id"
-    sedes_sede |o--o{ sedes_feriado : "sede_id"
+    negocios_negocio ||--o{ sedes_feriado : "negocio_id"
+    sedes_feriado ||--o{ sedes_feriado_sedes : "feriado_id"
+    sedes_sede ||--o{ sedes_feriado_sedes : "sede_id"
+    negocios_negocio ||--o| notificaciones_configuracioncorreos : "negocio_id"
     sedes_sede ||--o{ sedes_horarioatencion : "sede_id"
     sedes_sede ||--o{ sedes_sedeusuario : "sede_id"
     usuarios_direccion |o--o{ pedidos_pedido : "direccion_id"

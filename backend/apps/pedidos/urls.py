@@ -5,6 +5,7 @@ from .views import (
     PedidoCotizarView,
     PedidoEstadoView,
     PedidoListCreateView,
+    PedidoRechazarView,
 )
 
 urlpatterns = [
@@ -12,4 +13,5 @@ urlpatterns = [
     path("cotizar/", PedidoCotizarView.as_view(), name="pedido_cotizar"),
     path("<int:pk>/estado/", PedidoEstadoView.as_view(), name="pedido_estado"),
     path("<int:pk>/cancelar/", PedidoCancelarView.as_view(), name="pedido_cancelar"),
+    path("<int:pk>/rechazar/", PedidoRechazarView.as_view(), name="pedido_rechazar"),
 ]

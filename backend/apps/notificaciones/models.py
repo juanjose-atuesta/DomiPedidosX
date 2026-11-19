@@ -13,6 +13,7 @@ class TipoNotificacion(models.TextChoices):
     PEDIDO_EN_CAMINO = "pedido_en_camino", "Pedido en camino"
     ALERTA_CAPACIDAD = "alerta_capacidad", "Alerta de capacidad"
     ALERTA_STOCK_BAJO = "alerta_stock_bajo", "Alerta de stock bajo"
+    SIN_REPARTIDOR = "sin_repartidor", "Pedido sin repartidor disponible"
 
 
 class CanalNotificacion(models.TextChoices):
@@ -67,3 +68,30 @@ class Notificacion(models.Model):
 
     def __str__(self):
         return f"{self.tipo} ({self.estado_envio})"
+
+
+class ConfiguracionCorreos(models.Model):
+    """Qué correos envía un negocio a sus clientes, por tipo de evento (HU-8.10).
+
+    Todos vienen activados. Si un negocio no tiene fila, se usan los valores
+    por defecto.
+    """
+
+    negocio = models.OneToOneField(
+        "negocios.Negocio",
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name="configuracion_correos",
+    )
+    confirmacion = models.BooleanField(default=True)
+    cambio_estado = models.BooleanField(default=True)
+    cancelacion = models.BooleanField(default=True)
+    asignacion_repartidor = models.BooleanField(default=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "configuración de correos"
+        verbose_name_plural = "configuraciones de correos"
+
+    def __str__(self):
+        return f"Correos de {self.negocio}"

@@ -1,4 +1,26 @@
-from .models import CanalNotificacion, Notificacion, TipoNotificacion
+from django.core.mail import send_mail
+from django.db import transaction
+from django.utils import timezone
+
+from .models import (
+    CanalNotificacion,
+    ConfiguracionCorreos,
+    EstadoEnvio,
+    Notificacion,
+    TipoNotificacion,
+)
+
+# Correo interno de los clientes registrados sin correo (ver usuarios.services).
+DOMINIO_SIN_CORREO = "@sin-correo.invalid"
+
+EVENTOS_CORREO = ("confirmacion", "cambio_estado", "cancelacion", "asignacion_repartidor")
+
+TIPO_POR_EVENTO = {
+    "confirmacion": TipoNotificacion.PEDIDO_CONFIRMADO,
+    "cambio_estado": TipoNotificacion.CAMBIO_ESTADO,
+    "cancelacion": TipoNotificacion.PEDIDO_CANCELADO,
+    "asignacion_repartidor": TipoNotificacion.REPARTIDOR_ASIGNADO,
+}
 
 
 def crear_alerta_stock_bajo(
@@ -21,4 +43,133 @@ def crear_alerta_stock_bajo(
         canal=CanalNotificacion.SISTEMA,
         asunto=f"Stock bajo: {producto.nombre}",
         mensaje=mensaje,
+    )
+
+
+def crear_alerta_sin_repartidor(pedido):
+    """Alerta de panel: la asignación automática no encontró repartidor libre."""
+    ya_existe = Notificacion.objects.filter(
+        pedido=pedido, tipo=TipoNotificacion.SIN_REPARTIDOR, leida=False
+    ).exists()
+    if ya_existe:
+        return None
+    return Notificacion.objects.create(
+        sede=pedido.sede,
+        pedido=pedido,
+        tipo=TipoNotificacion.SIN_REPARTIDOR,
+        canal=CanalNotificacion.SISTEMA,
+        asunto=f"Pedido #{pedido.pk} sin repartidor",
+        mensaje=(
+            f"El pedido #{pedido.pk} está listo para despacho pero no hay "
+            f"repartidores disponibles en {pedido.sede.nombre}. Se asignará "
+            "cuando uno se libere, o puedes asignarlo manualmente."
+        ),
+    )
+
+
+def configuracion_correos(negocio_id):
+    """Configuración del negocio; sin fila, todos los eventos están activos."""
+    return ConfiguracionCorreos.objects.filter(negocio_id=negocio_id).first() or (
+        ConfiguracionCorreos(negocio_id=negocio_id)
+    )
+
+
+def correo_evento_activo(negocio_id, evento):
+    if evento not in EVENTOS_CORREO:
+        raise ValueError(f"Evento de correo desconocido: {evento}")
+    return getattr(configuracion_correos(negocio_id), evento)
+
+
+def notificar_cliente(pedido, evento, *, asunto, mensaje):
+    """Envía un correo al cliente del pedido si el negocio tiene el evento activo.
+
+    El envío ocurre al confirmar la transacción: si el cambio se revierte, no
+    sale ningún correo. Cada envío queda registrado en Notificacion.
+    Devuelve False si el correo no corresponde (sin cliente, sin correo real o
+    evento desactivado).
+    """
+    cliente = pedido.cliente
+    if cliente is None or not cliente.email or cliente.email.endswith(DOMINIO_SIN_CORREO):
+        return False
+    if not correo_evento_activo(pedido.sede.negocio_id, evento):
+        return False
+
+    def enviar():
+        registro = Notificacion.objects.create(
+            usuario=cliente,
+            sede=pedido.sede,
+            pedido=pedido,
+            tipo=TIPO_POR_EVENTO[evento],
+            canal=CanalNotificacion.CORREO,
+            asunto=asunto,
+            mensaje=mensaje,
+            intentos=1,
+        )
+        try:
+            send_mail(asunto, mensaje, None, [cliente.email], fail_silently=False)
+        except Exception:  # el pedido no debe fallar porque el correo falle
+            registro.estado_envio = EstadoEnvio.FALLIDO
+        else:
+            registro.estado_envio = EstadoEnvio.ENVIADO
+            registro.enviado_en = timezone.now()
+        registro.save(update_fields=["estado_envio", "enviado_en"])
+
+    transaction.on_commit(enviar)
+    return True
+
+
+def _encabezado(pedido):
+    return f"Hola {pedido.cliente_nombre},\n\n"
+
+
+def notificar_confirmacion(pedido):
+    from apps.promociones.services import formatear_pesos
+
+    return notificar_cliente(
+        pedido,
+        "confirmacion",
+        asunto=f"Recibimos tu pedido #{pedido.pk} - {pedido.sede.negocio.nombre}",
+        mensaje=(
+            _encabezado(pedido)
+            + f"{pedido.sede.nombre} recibió tu pedido #{pedido.pk} por "
+            + f"{formatear_pesos(pedido.total)}.\nTe avisaremos cuando cambie de estado."
+        ),
+    )
+
+
+def notificar_cambio_estado(pedido):
+    return notificar_cliente(
+        pedido,
+        "cambio_estado",
+        asunto=f"Tu pedido #{pedido.pk}: {pedido.get_estado_display()}",
+        mensaje=(
+            _encabezado(pedido)
+            + f"Tu pedido #{pedido.pk} ahora está: {pedido.get_estado_display()}."
+        ),
+    )
+
+
+def notificar_cancelacion(pedido, *, por_sede):
+    quien = "La sede rechazó" if por_sede else "Cancelaste"
+    return notificar_cliente(
+        pedido,
+        "cancelacion",
+        asunto=f"Pedido #{pedido.pk} cancelado",
+        mensaje=(
+            _encabezado(pedido)
+            + f"{quien} el pedido #{pedido.pk}.\nMotivo: {pedido.motivo_cancelacion}"
+        ),
+    )
+
+
+def notificar_asignacion(pedido):
+    repartidor = pedido.repartidor
+    return notificar_cliente(
+        pedido,
+        "asignacion_repartidor",
+        asunto=f"Tu pedido #{pedido.pk} ya tiene repartidor",
+        mensaje=(
+            _encabezado(pedido)
+            + f"{repartidor.nombre} llevará tu pedido #{pedido.pk}."
+        ),
     )

@@ -123,7 +123,8 @@ class PerfilRepartidor(models.Model):
         primary_key=True,
         related_name="perfil_repartidor",
     )
-    disponible = models.BooleanField(default=False)
+    # True = libre para recibir un pedido; False = ocupado con una entrega.
+    disponible = models.BooleanField(default=True)
     latitud = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
     longitud = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
     ubicacion_actualizada_en = models.DateTimeField(null=True, blank=True)

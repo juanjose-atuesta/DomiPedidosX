@@ -5,6 +5,8 @@ import { tieneRol } from "../utils/roles"
 const ENLACES = [
   { texto: "Usuarios", ruta: "/admin/usuarios", roles: ["admin"] },
   { texto: "Sedes", ruta: "/admin/sedes", roles: ["admin"] },
+  { texto: "Feriados", ruta: "/admin/feriados", roles: ["admin"] },
+  { texto: "Correos", ruta: "/admin/correos", roles: ["admin"] },
   { texto: "Pedidos", ruta: "/operador/pedidos", roles: ["operador", "admin"] },
   { texto: "Tablero de cocina", ruta: "/cocina", roles: ["cocina", "operador", "admin"] },
   { texto: "Categorías", ruta: "/operador/categorias", roles: ["operador", "admin"] },

@@ -1,11 +1,13 @@
-from datetime import time
+from datetime import time, timedelta
 from uuid import uuid4
 
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
+from apps.negocios.models import Negocio
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -435,3 +437,98 @@ class SedeGestionTests(APITestCase):
                 self.assertEqual(
                     response.status_code, status.HTTP_401_UNAUTHORIZED
                 )
+
+
+class FeriadoTests(APITestCase):
+    """HU-8.9: feriados por negocio que cierran una, varias o todas sus sedes."""
+
+    def setUp(self):
+        from apps.core.datos_prueba import (
+            auth_prueba,
+            crear_usuario_prueba,
+            habilitar_sede_para_pedidos,
+            producto_en_sede,
+        )
+
+        self.auth = auth_prueba
+        self.norte = Sede.objects.create(negocio=negocio_prueba(), nombre="Norte", direccion="C1")
+        self.sur = Sede.objects.create(negocio=negocio_prueba(), nombre="Sur", direccion="C2")
+        for sede in (self.norte, self.sur):
+            habilitar_sede_para_pedidos(sede)
+        self.admin = crear_usuario_prueba("admin.fer@example.com", Rol.ADMIN)
+        self.operador = crear_usuario_prueba("op.fer@example.com", Rol.OPERADOR, sede=self.norte)
+        self.cliente = crear_usuario_prueba("cli.fer@example.com", Rol.CLIENTE)
+        self.productos = {s.pk: producto_en_sede(s, f"Papas {s.nombre}") for s in (self.norte, self.sur)}
+        self.hoy = timezone.localdate()
+        self.url = reverse("feriado_list_create")
+
+    def _crear(self, datos, usuario=None):
+        return self.client.post(self.url, datos, format="json", **self.auth(usuario or self.admin))
+
+    def _pedir(self, sede, url_nombre="pedido_list_create"):
+        return self.client.post(
+            reverse(url_nombre),
+            {
+                "sede_id": str(sede.pk), "tipo": "recoger",
+                "detalles": [{"producto_id": str(self.productos[sede.pk].pk), "cantidad": 1}],
+            },
+            format="json", **self.auth(self.cliente),
+        )
+
+    def test_feriado_de_todas_las_sedes_bloquea_pedidos(self):
+        respuesta = self._crear({"fecha": str(self.hoy), "nombre": "Día festivo"})
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED, respuesta.data)
+        self.assertTrue(respuesta.data["aplica_a_todas"])
+
+        for sede in (self.norte, self.sur):
+            with self.subTest(sede=sede.nombre):
+                pedido = self._pedir(sede)
+                self.assertEqual(pedido.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(str(pedido.data["detail"]), "Sede cerrada por feriado")
+
+    def test_feriado_de_una_sede_no_cierra_las_demas(self):
+        self._crear({"fecha": str(self.hoy), "nombre": "Fiesta local", "sedes_ids": [str(self.norte.pk)]})
+
+        self.assertEqual(str(self._pedir(self.norte).data["detail"]), "Sede cerrada por feriado")
+        self.assertEqual(self._pedir(self.sur).status_code, status.HTTP_201_CREATED)
+
+    def test_feriado_de_otro_dia_no_bloquea(self):
+        self._crear({"fecha": str(self.hoy + timedelta(days=1)), "nombre": "Mañana"})
+
+        self.assertEqual(self._pedir(self.norte).status_code, status.HTTP_201_CREATED)
+
+    def test_cotizar_avisa_el_feriado(self):
+        self._crear({"fecha": str(self.hoy), "nombre": "Hoy"})
+
+        respuesta = self._pedir(self.norte, "pedido_cotizar")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["problemas"], ["Sede cerrada por feriado"])
+        self.assertFalse(respuesta.data["puede_confirmar"])
+
+    def test_crud_y_permisos(self):
+        creado = self._crear({"fecha": "2026-12-25", "nombre": "Navidad"}).data
+        detalle = reverse("feriado_detail", args=[creado["id"]])
+
+        editado = self.client.patch(
+            detalle, {"sedes_ids": [str(self.sur.pk)]}, format="json", **self.auth(self.admin)
+        )
+        self.assertEqual([s["nombre"] for s in editado.data["sedes"]], ["Sur"])
+
+        # El operador consulta pero no crea ni borra.
+        self.assertEqual(len(self.client.get(self.url, **self.auth(self.operador)).data), 1)
+        self.assertEqual(self._crear({"fecha": "2026-12-31", "nombre": "X"}, self.operador).status_code, 403)
+        self.assertEqual(self.client.delete(detalle, **self.auth(self.operador)).status_code, 403)
+
+        self.assertEqual(self.client.delete(detalle, **self.auth(self.admin)).status_code, 200)
+        self.assertEqual(self.client.get(self.url, **self.auth(self.admin)).data, [])
+
+    def test_no_usa_sedes_de_otro_negocio(self):
+        otra = Sede.objects.create(
+            negocio=Negocio.objects.create(nombre="Otro"), nombre="Ajena", direccion="C9"
+        )
+
+        respuesta = self._crear({"fecha": str(self.hoy), "nombre": "X", "sedes_ids": [str(otra.pk)]})
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("sedes_ids", respuesta.data)

@@ -23,4 +23,8 @@ urlpatterns = [
     path("api/cobertura/", include("apps.cobertura.urls")),
     # Creación y confirmación de pedidos con descuento de inventario
     path("api/pedidos/", include("apps.pedidos.urls")),
+    # Repartidores: estado, asignación manual y automática
+    path("api/repartos/", include("apps.repartos.urls")),
+    # Configuración de correos por evento
+    path("api/notificaciones/", include("apps.notificaciones.urls")),
 ]

@@ -163,7 +163,7 @@ Los roles de cada sección están en `ROLES_POR_SECCION` (`utils/roles.js`), que
 
 | Sección | Roles | Rutas |
 |---|---|---|
-| `/admin` | admin | `/admin/usuarios`, `/admin/usuarios/nueva`, `/admin/sedes`, `/admin/sedes/nueva`, `/admin/sedes/:id/editar`, `/admin/sedes/:id/zonas` |
+| `/admin` | admin | `/admin/usuarios`, `/admin/usuarios/nueva`, `/admin/sedes`, `/admin/sedes/nueva`, `/admin/sedes/:id/editar`, `/admin/sedes/:id/zonas`, `/admin/feriados`, `/admin/correos` |
 | `/operador` | operador, admin | `/operador/pedidos`, `/operador/pedidos/nuevo`, `/operador/categorias`, `/operador/productos`, `/operador/productos/nuevo`, `/operador/productos/:id/editar`, `/operador/promociones`, `/operador/promociones/nueva`, `/operador/promociones/:id/editar`, `/operador/inventario` |
 | `/cocina` | cocina, operador, admin | `/cocina` |
 | `/repartidor` | repartidor | `/repartidor` |
@@ -307,7 +307,11 @@ flowchart LR
 
 ### 4.5 Pedidos del operador
 
-- **`/operador/pedidos`:** tabla con filtros de sede, estado y fecha, y botón para avanzar cada pedido.
+- **`/operador/pedidos`:** tabla con filtros de sede, estado y fecha, y columna de repartidor.
+  - **Pedidos entrantes (Recibido):** "Aceptar" los pasa a cocina; "Rechazar" abre un modal que exige un motivo de al menos 10 caracteres (el cliente lo verá) y llama a `POST /pedidos/{id}/rechazar/`.
+  - **Domicilios listos sin repartidor:** "Asignar repartidor" abre un modal con los repartidores **disponibles** de la sede del pedido (`POST /repartos/pedidos/{id}/asignar/`).
+  - **Panel de repartidores** (`PanelRepartidores`): con una sede elegida, o si el usuario tiene una sola, muestra cada repartidor como Disponible u Ocupado con sus pedidos del día, y el interruptor de **asignación automática** de esa sede.
+  - **Alerta:** si la asignación automática no encontró repartidor, un aviso indica qué pedidos esperan.
 - **`/operador/pedidos/nuevo`:** registra pedidos por teléfono o mostrador. Busca al cliente por nombre si ya compró en el negocio, o por correo o teléfono exactos si es nuevo.
   - **Registro rápido:** "+ Registrar cliente nuevo" pide nombre, teléfono de 10 dígitos y, opcionalmente, apellido y correo (`POST /usuarios/clientes/`). El cliente queda elegido para el pedido.
   - **Dirección para este pedido:** si el cliente no tiene direcciones, o con "Usar otra dirección", el operador escribe la dirección y marca el punto en el mapa. Se guarda solo como copia en el pedido.
@@ -317,6 +321,9 @@ flowchart LR
 
 - **`/admin/usuarios/nueva`:** ya no pide contraseña. El backend envía al correo del empleado un enlace de activación de 24 horas.
 - **`/admin/usuarios`:** el personal sin activar muestra "Activación pendiente · Reenviar enlace".
+- **`/admin/sedes/:id/editar`:** incluye el interruptor de asignación automática de repartidores.
+- **`/admin/feriados`:** crea feriados con fecha, nombre y las sedes que cierran (ninguna marcada = todas) y los elimina. Lista los de hoy en adelante.
+- **`/admin/correos`:** un interruptor por evento (confirmación, cambio de estado, cancelación, repartidor asignado). Cada cambio se guarda al instante.
 - **`/admin/sedes/:id/zonas`** (botón "Zonas" en la lista de sedes): mapa con las zonas activas. Una zona nueva se define tocando el mapa: el centro, si es por radio, o los vértices, si es un polígono (mínimo 3, con "Deshacer punto"). Cada zona lleva tarifa de domicilio, pedido mínimo y tiempo estimado, y se puede editar, desactivar o reactivar.
 
 ### 4.6 Entregas del repartidor
@@ -324,8 +331,8 @@ flowchart LR
 Pantalla `/repartidor`, pensada para móvil.
 
 1. Consulta `GET /pedidos/?estado=listo_despacho,en_camino` cada 30 segundos.
-2. En "Listos para despacho", **Tomar pedido y salir** lo pasa a `en_camino` y queda a su nombre.
-3. En "En camino", **Marcar como entregado** finaliza el pedido.
+2. En "Listos para despacho", un pedido que el operador (o la asignación automática) le asignó aparece como "Asignado a ti" con **Salir a entregar**. Uno sin repartidor muestra **Tomar pedido y salir**: lo pasa a `en_camino` y queda a su nombre.
+3. En "En camino", **Marcar como entregado** finaliza el pedido y el repartidor vuelve a quedar disponible.
 
 Cada tarjeta muestra dirección, teléfono con enlace para llamar, productos, observaciones, total y forma de pago.
 

@@ -1,7 +1,7 @@
 ================================================================================
 DOMIPEDIDOSX - DOCUMENTACION DEL MODELO DE DATOS
 ================================================================================
-Base de datos: 25 tablas propias (SQLite en local, PostgreSQL/Supabase en el
+Base de datos: 27 tablas propias (SQLite en local, PostgreSQL/Supabase en el
 entorno desplegado). Los modelos estan en backend/apps/<app>/models.py.
 
 Este documento explica, por cada tabla:
@@ -63,7 +63,7 @@ Dominios y tablas
   Negocios        negocios_negocio
   Usuarios        usuarios_user, usuarios_direccion, usuarios_perfilrepartidor
   Sedes           sedes_sede, sedes_sedeusuario, sedes_horarioatencion,
-                  sedes_feriado
+                  sedes_feriado, sedes_feriado_sedes
   Menu            menu_categoria, menu_producto, menu_productocombo,
                   menu_grupoopcion, menu_opcionproducto
   Inventario      inventario_inventariosede
@@ -277,11 +277,14 @@ Atributos
                   mas cercana cuando otra supera su capacidad.
   activa          False = la sede deja de recibir pedidos sin perder su
                   historial (HU-8.3).
+  asignacion_automatica_repartidor  True = al quedar listo un domicilio se
+                  asigna al repartidor disponible con menos pedidos del dia
+                  (HU-6.6). Por defecto False.
 
 Relaciones (es uno de los cuatro centros del modelo)
   N-1  negocios_negocio          El negocio al que pertenece.
   1-N  sedes_horarioatencion     Sus horarios por dia.
-  1-N  sedes_feriado             Sus dias de cierre.
+  N-M  sedes_feriado (via sedes_feriado_sedes)  Sus dias de cierre.
   N-M  usuarios_user (via sedes_sedeusuario)   Su personal.
   1-N  inventario_inventariosede Que productos vende y cuanto stock tiene.
   1-N  cobertura_zonacobertura   Las zonas a las que entrega.
@@ -320,21 +323,26 @@ Atributos
   hora_cierre    Hora a la que cierra.
 Relaciones: N-1 con sedes_sede.
 Reglas de BD: dia entre 1 y 7; hora_cierre debe ser mayor que hora_apertura.
-Pendiente del codigo: evitar tramos traslapados el mismo dia; aplicar los
-  feriados por encima del horario normal.
+Reglas del codigo: no se aceptan tramos traslapados el mismo dia; al pedir se
+  exige un tramo abierto en este momento, y un feriado cierra la sede aunque
+  el horario diga que esta abierta.
 
 --------------------------------------------------------------------------------
 sedes_feriado                       [id numerico]
 --------------------------------------------------------------------------------
-Proposito: dias especiales en los que una sede (o todas) no atiende.
+Proposito: dias en los que una, varias o todas las sedes de un negocio no
+atienden (HU-8.9). Ese dia, pedir en una sede afectada responde
+"Sede cerrada por feriado".
 
 Atributos
-  sede     FK a sedes_sede (CASCADE). Puede quedar VACIA: significa que el
-           feriado aplica a todas las sedes.
+  negocio  FK a negocios_negocio (CASCADE). Dueno del feriado.
+  sedes    N-M con sedes_sede (tabla sedes_feriado_sedes). VACIA = aplica a
+           todas las sedes del negocio.
   fecha    El dia.
   nombre   Descripcion ('Navidad', 'Mantenimiento').
-  cerrado  True = cerrado todo el dia.
-Relaciones: N-1 opcional con sedes_sede.
+  cerrado  True = cerrado todo el dia (el unico caso que usa el codigo).
+Relaciones: N-1 con negocios_negocio; N-M con sedes_sede.
+Reglas del codigo: las sedes deben ser del mismo negocio.
 
 
 ================================================================================
@@ -721,8 +729,9 @@ Atributos
   sede          FK a sedes_sede (CASCADE), opcional. Sede a la que va la alerta.
   pedido        FK a pedidos_pedido (CASCADE), opcional. Pedido que la origino.
   tipo          pedido_confirmado, cambio_estado, pedido_cancelado,
-                repartidor_asignado, pedido_en_camino, alerta_capacidad o
-                alerta_stock_bajo.
+                repartidor_asignado, pedido_en_camino, alerta_capacidad,
+                alerta_stock_bajo o sin_repartidor (la asignacion automatica
+                no encontro repartidor libre).
   canal         correo o sistema (alerta dentro del panel).
   asunto        Asunto del correo (opcional).
   mensaje       Contenido.
@@ -732,8 +741,23 @@ Atributos
   creado_en     Cuando se genero.
   enviado_en    Cuando se envio con exito.
 Relaciones: N-1 opcionales con usuarios_user, sedes_sede y pedidos_pedido.
-Pendiente del codigo: la tarea asincrona (Celery) que toma las pendientes,
-  envia el correo y actualiza estado_envio e intentos.
+Reglas del codigo: los correos se envian al confirmar la transaccion y solo
+  si el negocio tiene activo ese evento (notificaciones_configuracioncorreos).
+Pendiente del codigo: reintentar los envios fallidos.
+
+--------------------------------------------------------------------------------
+notificaciones_configuracioncorreos (PK: negocio)
+--------------------------------------------------------------------------------
+Proposito: que correos envia cada negocio a sus clientes (HU-8.10).
+
+Atributos
+  negocio                PK y FK a negocios_negocio (1-1). CASCADE.
+  confirmacion           Correo al registrar el pedido.
+  cambio_estado          Correo en cada avance de estado.
+  cancelacion            Correo al cancelar o rechazar (con el motivo).
+  asignacion_repartidor  Correo al asignar repartidor.
+  actualizado_en         Ultimo cambio.
+Todos son True por defecto. Sin fila, el negocio envia todos.
 
 
 ================================================================================
@@ -786,8 +810,8 @@ las debe garantizar el codigo, de preferencia dentro de transacciones
      aceptan del cliente.
   8. Cada cambio de estado deja una fila en pedidos_historialestado y puede
      generar una notificacion.
-  9. Solo el cliente puede cancelar su pedido y solo antes de que inicie la
-     preparacion.
+  9. Un pedido solo se cancela mientras esta Recibido: el cliente con motivo
+     opcional o la sede (rechazo) con motivo de al menos 10 caracteres.
  10. Los roles se respetan: solo un usuario con rol repartidor puede ser
      repartidor de un pedido; solo cocina y repartidor cambian ciertos estados.
 

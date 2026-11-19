@@ -15,13 +15,18 @@ from apps.menu.models import (
     ProductoCombo,
     TipoGrupoOpcion,
 )
-from apps.notificaciones.services import crear_alerta_stock_bajo
+from apps.notificaciones.services import (
+    crear_alerta_stock_bajo,
+    notificar_cambio_estado,
+    notificar_cancelacion,
+    notificar_confirmacion,
+)
 from apps.promociones.services import (
     buscar_promocion,
     calcular_descuento_promocion,
     formatear_pesos,
 )
-from apps.sedes.models import Sede, SedeUsuario
+from apps.sedes.models import Feriado, Sede, SedeUsuario
 from apps.usuarios.models import Rol
 
 from .models import (
@@ -250,7 +255,11 @@ def pedidos_visibles_para(usuario):
 def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
     """Avanza el estado de un pedido y lo registra en el historial."""
     with transaction.atomic():
-        pedido = Pedido.objects.select_for_update().get(pk=pedido_id)
+        pedido = (
+            Pedido.objects.select_for_update()
+            .select_related("sede__negocio", "repartidor")
+            .get(pk=pedido_id)
+        )
         campos = ["estado", "actualizado_en"]
 
         if usuario.rol == Rol.REPARTIDOR:
@@ -274,10 +283,42 @@ def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
             cambiado_por=usuario,
             comentario=comentario,
         )
+        _despues_de_cambiar_estado(pedido, usuario)
+        notificar_cambio_estado(pedido)
         return pedido
 
 
+def _despues_de_cambiar_estado(pedido, usuario):
+    """Efectos del reparto: asignación automática, ocupar y liberar repartidores."""
+    from apps.repartos import services as repartos
+
+    sede = pedido.sede
+    if (
+        pedido.estado == EstadoPedido.LISTO_DESPACHO
+        and pedido.tipo == TipoPedido.DOMICILIO
+        and sede.asignacion_automatica_repartidor
+    ):
+        repartos.asignar_automaticamente(pedido)
+    elif pedido.estado == EstadoPedido.EN_CAMINO and pedido.repartidor_id:
+        repartos.marcar_ocupado(pedido.repartidor)
+    elif pedido.estado == EstadoPedido.ENTREGADO and pedido.repartidor_id:
+        if repartos.liberar_si_corresponde(pedido.repartidor):
+            repartos.asignar_pendientes(sede)
+
+
 MENSAJE_FUERA_DE_COBERTURA = "Tu dirección está fuera de la zona de cobertura"
+MENSAJE_FERIADO = "Sede cerrada por feriado"
+
+
+def es_feriado(sede, fecha=None):
+    """Hay un feriado de cierre hoy para la sede: uno de su negocio que la
+    incluye o que no tiene sedes (aplica a todas)."""
+    fecha = fecha or timezone.localdate()
+    return (
+        Feriado.objects.filter(negocio_id=sede.negocio_id, fecha=fecha, cerrado=True)
+        .filter(Q(sedes=sede) | Q(sedes__isnull=True))
+        .exists()
+    )
 
 
 def sede_abierta(sede, momento=None):
@@ -351,7 +392,9 @@ def _cotizar(
     problemas = []
     momento = timezone.now()
 
-    if not sede_abierta(sede, momento):
+    if es_feriado(sede, timezone.localdate(momento)):
+        problemas.append(MENSAJE_FERIADO)
+    elif not sede_abierta(sede, momento):
         problemas.append(_mensaje_sede_cerrada(sede, momento))
 
     zona = None
@@ -568,6 +611,7 @@ def crear_pedido(
         )
 
         descontar_stock_pedido(pedido)
+        notificar_confirmacion(pedido)
         return pedido
 
 
@@ -585,22 +629,40 @@ def _requerimientos_de_stock(pedido):
     return requerimientos
 
 
-def cancelar_pedido(pedido_id, *, usuario, motivo=""):
-    """El cliente cancela su pedido mientras sigue en estado Recibido (HU-5.6).
+MOTIVO_RECHAZO_MINIMO = 10
 
-    Devuelve al inventario de la sede lo que se descontó al confirmarlo y
-    deja la cancelación en el historial. El cupo de la promoción se libera
-    solo porque los pedidos cancelados no cuentan.
+
+def cancelar_pedido(pedido_id, *, usuario, motivo="", por_sede=False):
+    """Cancela un pedido que sigue en estado Recibido.
+
+    - El cliente lo cancela (HU-5.6); el motivo es opcional.
+    - La sede lo rechaza (HU-6.2, `por_sede=True`); el motivo es obligatorio,
+      de al menos 10 caracteres, y el cliente lo ve en su historial.
+
+    En ambos casos devuelve al inventario de la sede lo que se descontó al
+    confirmarlo, deja la cancelación en el historial y avisa al cliente. El
+    cupo de la promoción se libera solo porque los cancelados no cuentan.
     """
+    motivo = (motivo or "").strip()
+    if por_sede and len(motivo) < MOTIVO_RECHAZO_MINIMO:
+        raise ValueError(
+            f"El motivo del rechazo debe tener al menos {MOTIVO_RECHAZO_MINIMO} caracteres."
+        )
+
     with transaction.atomic():
-        pedido = Pedido.objects.select_for_update().get(pk=pedido_id)
+        pedido = (
+            Pedido.objects.select_for_update()
+            .select_related("sede__negocio")
+            .get(pk=pedido_id)
+        )
         if pedido.estado != EstadoPedido.RECIBIDO:
+            accion = "rechazar" if por_sede else "cancelar"
             raise ValueError(
-                "Solo puedes cancelar un pedido mientras está en estado "
+                f"Solo se puede {accion} un pedido mientras está en estado "
                 f"Recibido. Este pedido está {pedido.get_estado_display()}."
             )
 
-        motivo = (motivo or "").strip() or "Cancelado por el cliente."
+        motivo = motivo or "Cancelado por el cliente."
         pedido.estado = EstadoPedido.CANCELADO
         pedido.motivo_cancelacion = motivo
         pedido.save(update_fields=["estado", "motivo_cancelacion", "actualizado_en"])
@@ -610,9 +672,15 @@ def cancelar_pedido(pedido_id, *, usuario, motivo=""):
             pedido=pedido,
             estado=EstadoPedido.CANCELADO,
             cambiado_por=usuario,
-            comentario=motivo,
+            comentario=f"Rechazado por la sede: {motivo}" if por_sede else motivo,
         )
+        notificar_cancelacion(pedido, por_sede=por_sede)
         return pedido
+
+
+def rechazar_pedido(pedido_id, *, usuario, motivo):
+    """La sede rechaza un pedido entrante con un motivo obligatorio (HU-6.2)."""
+    return cancelar_pedido(pedido_id, usuario=usuario, motivo=motivo, por_sede=True)
 
 
 def reponer_stock_pedido(pedido):

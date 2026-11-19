@@ -145,6 +145,18 @@ class CancelarPedidoSerializer(serializers.Serializer):
     )
 
 
+class RechazarPedidoSerializer(serializers.Serializer):
+    motivo = serializers.CharField(
+        min_length=10,
+        max_length=300,
+        error_messages={
+            "min_length": "El motivo del rechazo debe tener al menos 10 caracteres.",
+            "blank": "El motivo del rechazo es obligatorio.",
+            "required": "El motivo del rechazo es obligatorio.",
+        },
+    )
+
+
 class CambioEstadoSerializer(serializers.Serializer):
     estado = serializers.ChoiceField(choices=EstadoPedido.choices)
     comentario = serializers.CharField(required=False, allow_blank=True)
@@ -188,9 +200,26 @@ class PedidoSerializer(serializers.ModelSerializer):
         source="promocion.nombre", read_only=True, default=None
     )
     puede_cancelar = serializers.SerializerMethodField()
+    repartidor_id = serializers.UUIDField(read_only=True, allow_null=True)
+    repartidor_nombre = serializers.SerializerMethodField()
+    esperando_repartidor = serializers.SerializerMethodField()
+    asignacion_automatica = serializers.BooleanField(
+        source="sede.asignacion_automatica_repartidor", read_only=True
+    )
 
     def get_puede_cancelar(self, pedido):
         return pedido.estado == EstadoPedido.RECIBIDO
+
+    def get_repartidor_nombre(self, pedido):
+        return pedido.repartidor.nombre_completo if pedido.repartidor_id else None
+
+    def get_esperando_repartidor(self, pedido):
+        """Domicilio listo que nadie lleva todavía."""
+        return (
+            pedido.tipo == TipoPedido.DOMICILIO
+            and pedido.estado == EstadoPedido.LISTO_DESPACHO
+            and pedido.repartidor_id is None
+        )
 
     def get_estados_siguientes(self, pedido):
         return estados_siguientes(pedido)
@@ -215,6 +244,10 @@ class PedidoSerializer(serializers.ModelSerializer):
             "motivo_cancelacion",
             "zona_nombre",
             "promocion_nombre",
+            "repartidor_id",
+            "repartidor_nombre",
+            "esperando_repartidor",
+            "asignacion_automatica",
             "metodo_pago",
             "subtotal",
             "costo_domicilio",

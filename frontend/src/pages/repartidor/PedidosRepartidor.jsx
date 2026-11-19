@@ -14,11 +14,14 @@ const SECCIONES = [
 const ESTADOS_REPARTO = SECCIONES.map((s) => s.estado).join(",")
 const ETIQUETA_PAGO = { efectivo: "Efectivo", tarjeta: "Tarjeta", transferencia: "Transferencia" }
 
-function textoAccion(estado) {
-  return estado === "en_camino" ? "Tomar pedido y salir" : accionEstado(estado)
+// Si el operador ya se lo asignó, solo sale; si no, lo toma y sale.
+function textoAccion(estado, asignado) {
+  if (estado !== "en_camino") return accionEstado(estado)
+  return asignado ? "Salir a entregar" : "Tomar pedido y salir"
 }
 
-function TarjetaEntrega({ pedido, procesando, onAvanzar }) {
+function TarjetaEntrega({ pedido, procesando, onAvanzar, usuarioId }) {
+  const asignado = pedido.repartidor_id === usuarioId
   return (
     <article className="flex flex-col gap-3 rounded-xl border border-borde bg-white p-4">
       <div className="flex items-start justify-between gap-2">
@@ -30,6 +33,12 @@ function TarjetaEntrega({ pedido, procesando, onAvanzar }) {
         </div>
         <EtiquetaEstado estado={ETIQUETA_ESTADO[pedido.estado]} />
       </div>
+
+      {asignado && pedido.estado === "listo_despacho" && (
+        <p className="rounded-lg bg-fondo px-3 py-2 text-xs font-semibold text-texto">
+          Asignado a ti
+        </p>
+      )}
 
       <div className="flex flex-col gap-1 text-sm text-texto">
         <p className="break-words font-semibold">{pedido.direccion_entrega}</p>
@@ -71,7 +80,7 @@ function TarjetaEntrega({ pedido, procesando, onAvanzar }) {
           disabled={procesando}
           onClick={() => onAvanzar(pedido, estado)}
         >
-          {procesando ? "Actualizando…" : textoAccion(estado)}
+          {procesando ? "Actualizando…" : textoAccion(estado, asignado)}
         </Boton>
       ))}
     </article>
@@ -130,6 +139,7 @@ export default function PedidosRepartidor() {
                     pedido={pedido}
                     procesando={procesandoId === pedido.id}
                     onAvanzar={avanzar}
+                    usuarioId={usuario?.id}
                   />
                 ))}
               </section>

@@ -53,3 +53,61 @@ def habilitar_sede_para_pedidos(
         pedido_minimo=Decimal(pedido_minimo),
         tiempo_estimado_min=tiempo_min,
     )
+
+
+CLAVE_PRUEBA = "ClaveSegura#2024"
+
+
+def crear_usuario_prueba(email, rol, *, sede=None, telefono="3000000000", **extra):
+    """Usuario con los campos obligatorios; el personal queda en `sede` si se indica."""
+    from apps.sedes.models import SedeUsuario
+    from apps.usuarios.models import PerfilRepartidor, User
+
+    usuario = User.objects.create_user(
+        negocio=negocio_de_rol(rol) if sede is None else (
+            None if rol == Rol.CLIENTE else sede.negocio
+        ),
+        email=email,
+        password=CLAVE_PRUEBA,
+        nombre=extra.pop("nombre", email.split("@")[0].title()),
+        apellido=extra.pop("apellido", "Prueba"),
+        telefono=telefono,
+        rol=rol,
+        **extra,
+    )
+    if sede is not None and rol != Rol.CLIENTE:
+        SedeUsuario.objects.create(usuario=usuario, sede=sede)
+    if rol == Rol.REPARTIDOR:
+        PerfilRepartidor.objects.create(usuario=usuario, disponible=True)
+    return usuario
+
+
+def producto_en_sede(sede, nombre="Hamburguesa", precio="15000", *, stock=None):
+    """Producto del negocio de la sede, a la venta en ella. Sin `stock` no controla existencias."""
+    from decimal import Decimal
+
+    from apps.inventario.models import InventarioSede
+    from apps.menu.models import Producto
+
+    producto = Producto.objects.create(
+        negocio=sede.negocio,
+        nombre=nombre,
+        precio_base=Decimal(precio),
+        tiempo_preparacion_min=10,
+    )
+    InventarioSede.objects.create(
+        sede=sede,
+        producto=producto,
+        controla_stock=stock is not None,
+        stock_actual=stock or 0,
+        stock_minimo=0,
+    )
+    return producto
+
+
+def auth_prueba(usuario):
+    """Cabecera Authorization con un access token del usuario."""
+    from apps.usuarios.serializers import LoginSerializer
+
+    token = LoginSerializer.get_token(usuario).access_token
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}

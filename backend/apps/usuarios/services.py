@@ -119,7 +119,7 @@ def crear_usuario_personal(
         )
 
         if rol == Rol.REPARTIDOR:
-            PerfilRepartidor.objects.create(usuario=usuario, disponible=False)
+            PerfilRepartidor.objects.create(usuario=usuario, disponible=True)
 
         enviar_enlace_activacion(usuario)
         return usuario

@@ -1,6 +1,6 @@
 # DomiPedidosX: esquema de la base de datos
 
-Resume el modelo multi-negocio y las relaciones con `Negocio`. La base tiene **25 tablas propias**. Se usa SQLite en local y PostgreSQL en despliegue.
+Resume el modelo multi-negocio y las relaciones con `Negocio`. La base tiene **27 tablas propias**. Se usa SQLite en local y PostgreSQL en despliegue.
 
 | Archivo | Contenido |
 |---|---|
@@ -128,7 +128,7 @@ flowchart TD
     PE --> H[pedidos_historialestado]
 ```
 
-El diagrama completo, con las 25 tablas, está en `domipedidosx_erd.mmd`.
+El diagrama completo, con las 27 tablas, está en `domipedidosx_erd.mmd`.
 
 ## 4. Migración de datos existentes
 
@@ -179,3 +179,37 @@ Estas columnas ya existían, pero hasta este cierre no se llenaban:
 | `sedes_horarioatencion` | todas | Se valida que la sede esté abierta al pedir |
 
 El cupo diario de una promoción no tiene columna: se cuenta con los pedidos del día que la usan y no están cancelados (índice `idx_pedido_promocion`).
+
+## 6. Cambios del Sprint 4
+
+| Migración | Cambio |
+|---|---|
+| `sedes/0005_feriados_por_negocio_y_asignacion_automatica` | Columna `asignacion_automatica_repartidor` en `sedes_sede`. `sedes_feriado` pasa a tener `negocio_id` y una relación N-M con sedes (`sedes_feriado_sedes`); los datos de la antigua columna `sede_id` se copian y la columna se elimina |
+| `notificaciones/0005_configuracion_correos` | Tabla nueva `notificaciones_configuracioncorreos`. Nuevo tipo de notificación `sin_repartidor` |
+| `usuarios/0004_repartidores_disponibles` | `usuarios_perfilrepartidor.disponible` pasa a `true` por defecto; los repartidores existentes quedan disponibles, salvo los que llevan un domicilio en curso |
+
+### `sedes_feriado` (HU-8.9)
+
+| Columna | Tipo | Reglas | Descripción |
+|---|---|---|---|
+| `id` | bigint | Clave primaria | Identificador |
+| `negocio_id` | UUID | FK a `negocios_negocio`, `CASCADE` | Dueño del feriado |
+| `fecha` | date | Índice | Día de cierre |
+| `nombre` | varchar(100) | Obligatorio | Descripción |
+| `cerrado` | boolean | Por defecto `true` | Cierra todo el día |
+
+`sedes_feriado_sedes` une feriados y sedes. Un feriado sin filas ahí aplica a todas las sedes de su negocio.
+
+### `notificaciones_configuracioncorreos` (HU-8.10)
+
+| Columna | Tipo | Reglas | Descripción |
+|---|---|---|---|
+| `negocio_id` | UUID | PK y FK a `negocios_negocio` (1-1), `CASCADE` | Negocio |
+| `confirmacion`, `cambio_estado`, `cancelacion`, `asignacion_repartidor` | boolean | Por defecto `true` | Si se envía el correo de ese evento |
+| `actualizado_en` | timestamp | Automático | Último cambio |
+
+### Repartidores (HU-6.5 y HU-6.6)
+
+- `usuarios_perfilrepartidor.disponible`: `true` = disponible, `false` = ocupado con una entrega.
+- `sedes_sede.asignacion_automatica_repartidor`: activa la asignación automática en la sede.
+- La carga del día de un repartidor no tiene columna: se cuenta con `pedidos_pedido.repartidor_id` y `creado_en`, sin contar cancelados.

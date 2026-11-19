@@ -644,7 +644,7 @@ class RegistroPersonalTests(APITestCase):
 
         usuario = User.objects.get(email="repartidor.perfil@example.com")
         perfil = PerfilRepartidor.objects.get(usuario=usuario)
-        self.assertFalse(perfil.disponible)
+        self.assertTrue(perfil.disponible)  # libre para recibir pedidos
 
     def test_admin_crea_otro_admin_sin_sedes(self):
         response = self._post(

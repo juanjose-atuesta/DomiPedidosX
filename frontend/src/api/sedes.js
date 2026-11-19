@@ -36,3 +36,19 @@ export async function reactivarSede(id) {
   const { data } = await api.post(`/sedes/${id}/reactivar/`)
   return data
 }
+
+export async function listarFeriados(desde) {
+  const { data } = await api.get("/sedes/feriados/", { params: desde ? { desde } : undefined })
+  return data
+}
+
+// Sin sedes_ids el feriado aplica a todas las sedes del negocio.
+export async function crearFeriado(datos) {
+  const { data } = await api.post("/sedes/feriados/", datos)
+  return data
+}
+
+export async function eliminarFeriado(id) {
+  const { data } = await api.delete(`/sedes/feriados/${id}/`)
+  return data
+}

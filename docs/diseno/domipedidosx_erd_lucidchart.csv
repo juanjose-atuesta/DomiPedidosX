@@ -164,7 +164,10 @@ postgresql,domipedidosx,public,sedes_feriado,id,1,bigint,,PRIMARY KEY,,,
 postgresql,domipedidosx,public,sedes_feriado,fecha,2,date,,,,,
 postgresql,domipedidosx,public,sedes_feriado,nombre,3,character varying,100,,,,
 postgresql,domipedidosx,public,sedes_feriado,cerrado,4,boolean,,,,,
-postgresql,domipedidosx,public,sedes_feriado,sede_id,5,uuid,,FOREIGN KEY,public,sedes_sede,id
+postgresql,domipedidosx,public,sedes_feriado,negocio_id,5,uuid,,FOREIGN KEY,public,negocios_negocio,id
+postgresql,domipedidosx,public,sedes_feriado_sedes,id,1,bigint,,PRIMARY KEY,,,
+postgresql,domipedidosx,public,sedes_feriado_sedes,feriado_id,2,bigint,,FOREIGN KEY,public,sedes_feriado,id
+postgresql,domipedidosx,public,sedes_feriado_sedes,sede_id,3,uuid,,FOREIGN KEY,public,sedes_sede,id
 postgresql,domipedidosx,public,sedes_horarioatencion,id,1,bigint,,PRIMARY KEY,,,
 postgresql,domipedidosx,public,sedes_horarioatencion,dia_semana,2,smallint,,,,,
 postgresql,domipedidosx,public,sedes_horarioatencion,hora_apertura,3,time without time zone,,,,,
@@ -222,3 +225,11 @@ postgresql,domipedidosx,public,usuarios_tokenactivacion,creado_en,3,timestamp wi
 postgresql,domipedidosx,public,usuarios_tokenactivacion,expira_en,4,timestamp with time zone,,,,,
 postgresql,domipedidosx,public,usuarios_tokenactivacion,usado_en,5,timestamp with time zone,,,,,
 postgresql,domipedidosx,public,usuarios_tokenactivacion,usuario_id,6,uuid,,FOREIGN KEY,public,usuarios_user,id
+postgresql,domipedidosx,public,sedes_sede,asignacion_automatica_repartidor,11,boolean,,,,,
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,negocio_id,1,uuid,,PRIMARY KEY,,,
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,negocio_id,1,uuid,,FOREIGN KEY,public,negocios_negocio,id
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,confirmacion,2,boolean,,,,,
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,cambio_estado,3,boolean,,,,,
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,cancelacion,4,boolean,,,,,
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,asignacion_repartidor,5,boolean,,,,,
+postgresql,domipedidosx,public,notificaciones_configuracioncorreos,actualizado_en,6,timestamp with time zone,,,,,

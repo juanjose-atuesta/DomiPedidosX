@@ -1,13 +1,14 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils.dateparse import parse_date
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import EsAdmin, exigir_negocio
+from apps.core.permissions import EsAdmin, EsOperador, exigir_negocio
 from apps.usuarios.models import Rol
 
-from .models import Sede
-from .serializers import SedeSerializer
+from .models import Feriado, Sede
+from .serializers import FeriadoSerializer, SedeSerializer
 from .services import (
     actualizar_sede,
     crear_sede,
@@ -183,3 +184,76 @@ class SedeReactivarView(APIView):
                 "sede": SedeSerializer(sede).data,
             }
         )
+
+
+# --- Feriados (HU-8.9) -------------------------------------------------------
+
+
+class FeriadoListCreateView(APIView):
+    """Feriados del negocio. El operador los consulta; el admin los gestiona.
+
+    `?desde=AAAA-MM-DD` filtra los de esa fecha en adelante.
+    """
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [EsAdmin()]
+        return [(EsAdmin | EsOperador)()]
+
+    def get(self, request):
+        negocio = exigir_negocio(request.user)
+        feriados = Feriado.objects.filter(negocio=negocio).prefetch_related("sedes")
+        desde = parse_date(request.query_params.get("desde") or "")
+        if desde:
+            feriados = feriados.filter(fecha__gte=desde)
+        return Response(FeriadoSerializer(feriados, many=True).data)
+
+    def post(self, request):
+        negocio = exigir_negocio(request.user)
+        serializer = FeriadoSerializer(
+            data=request.data, context={"negocio_id": negocio.pk}
+        )
+        serializer.is_valid(raise_exception=True)
+        feriado = serializer.save(negocio=negocio)
+        return Response(FeriadoSerializer(feriado).data, status=status.HTTP_201_CREATED)
+
+
+class FeriadoDetailView(APIView):
+    permission_classes = [EsAdmin]
+
+    def _obtener(self, request, pk):
+        negocio = exigir_negocio(request.user)
+        return Feriado.objects.filter(pk=pk, negocio=negocio).first()
+
+    def get(self, request, pk):
+        feriado = self._obtener(request, pk)
+        if feriado is None:
+            return Response({"detail": "Feriado no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(FeriadoSerializer(feriado).data)
+
+    def put(self, request, pk):
+        return self._actualizar(request, pk, partial=False)
+
+    def patch(self, request, pk):
+        return self._actualizar(request, pk, partial=True)
+
+    def _actualizar(self, request, pk, *, partial):
+        feriado = self._obtener(request, pk)
+        if feriado is None:
+            return Response({"detail": "Feriado no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = FeriadoSerializer(
+            feriado,
+            data=request.data,
+            partial=partial,
+            context={"negocio_id": feriado.negocio_id},
+        )
+        serializer.is_valid(raise_exception=True)
+        feriado = serializer.save()
+        return Response(FeriadoSerializer(feriado).data)
+
+    def delete(self, request, pk):
+        feriado = self._obtener(request, pk)
+        if feriado is None:
+            return Response({"detail": "Feriado no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        feriado.delete()
+        return Response({"mensaje": "Feriado eliminado."})
