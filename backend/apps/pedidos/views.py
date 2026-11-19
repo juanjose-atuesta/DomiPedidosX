@@ -17,6 +17,7 @@ from .models import Pedido
 from .serializers import (
     CambioEstadoSerializer,
     CancelarPedidoSerializer,
+    RechazarPedidoSerializer,
     PedidoCreateSerializer,
     PedidoFiltroSerializer,
     PedidoSerializer,
@@ -27,6 +28,7 @@ from .services import (
     cotizar_pedido,
     crear_pedido,
     pedidos_visibles_para,
+    rechazar_pedido,
 )
 
 PERMISO_CREAR = EsCliente | EsOperador | EsAdmin
@@ -47,7 +49,7 @@ class PedidoListCreateView(APIView):
 
         pedidos = (
             pedidos_visibles_para(request.user)
-            .select_related("sede__negocio")
+            .select_related("sede__negocio", "zona", "promocion", "repartidor")
             .prefetch_related("detalles__opciones")
         )
         if "sede" in datos:
@@ -203,6 +205,33 @@ class PedidoCancelarView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             pedido = cancelar_pedido(
+                pk, usuario=request.user, motivo=serializer.validated_data["motivo"]
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(PedidoSerializer(pedido).data)
+
+
+class PedidoRechazarView(APIView):
+    """El operador rechaza un pedido entrante con motivo obligatorio (HU-6.2).
+
+    Aceptarlo es pasarlo a `en_preparacion` con PATCH /pedidos/{id}/estado/.
+    """
+
+    permission_classes = [EsOperador | EsAdmin]
+
+    def post(self, request, pk):
+        pedido = Pedido.objects.filter(pk=pk).first()
+        if pedido is None:
+            return Response(
+                {"detail": "Pedido no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        exigir_gestion_sede(request.user, pedido.sede_id)
+        serializer = RechazarPedidoSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            pedido = rechazar_pedido(
                 pk, usuario=request.user, motivo=serializer.validated_data["motivo"]
             )
         except ValueError as exc:

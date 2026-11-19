@@ -26,3 +26,9 @@ export async function cancelarPedido(id, motivo = "") {
   const { data } = await api.post(`/pedidos/${id}/cancelar/`, { motivo })
   return data
 }
+
+// El operador rechaza un pedido entrante; el motivo (mín. 10 caracteres) lo ve el cliente.
+export async function rechazarPedido(id, motivo) {
+  const { data } = await api.post(`/pedidos/${id}/rechazar/`, { motivo })
+  return data
+}

@@ -1232,3 +1232,102 @@ class CancelacionPedidoTests(_BaseCheckout):
         self.assertEqual(
             self._cancelar(pedido_id, operador).status_code, status.HTTP_403_FORBIDDEN
         )
+
+
+class RechazoPedidoTests(_BaseCheckout):
+    """HU-6.2: el operador rechaza un pedido entrante con motivo de 10+ caracteres."""
+
+    def setUp(self):
+        super().setUp()
+        self.operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.rechazo@example.com", password=PASSWORD,
+            nombre="Op", apellido="Rechazo", telefono="3000000000", rol=Rol.OPERADOR,
+        )
+        SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
+
+    def _rechazar(self, pedido_id, motivo, usuario=None):
+        return self.client.post(
+            reverse("pedido_rechazar", args=[pedido_id]), {"motivo": motivo},
+            format="json", **self._auth(usuario or self.operador),
+        )
+
+    def test_rechazar_devuelve_stock_y_el_cliente_ve_el_motivo(self):
+        pedido_id = self._pedir(self._payload([(self.hamburguesa, 3)])).data["id"]
+
+        respuesta = self._rechazar(pedido_id, "Nos quedamos sin gas en la cocina")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK, respuesta.data)
+        self.assertEqual(respuesta.data["estado"], "cancelado")
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 20)
+        ultimo = HistorialEstado.objects.filter(pedido_id=pedido_id).last()
+        self.assertEqual(ultimo.estado, EstadoPedido.CANCELADO)
+        self.assertEqual(ultimo.cambiado_por, self.operador)
+        self.assertIn("Rechazado por la sede", ultimo.comentario)
+
+        del_cliente = self.client.get(self.url, **self._auth()).data[0]
+        self.assertEqual(del_cliente["motivo_cancelacion"], "Nos quedamos sin gas en la cocina")
+
+    def test_rechazar_combo_devuelve_sus_componentes(self):
+        combo = self._producto("Combo", "18000")
+        combo.es_combo = True
+        combo.save()
+        ProductoCombo.objects.create(combo=combo, producto=self.limonada, cantidad=3)
+        InventarioSede.objects.create(sede=self.sede, producto=combo, stock_actual=5)
+        pedido_id = self._pedir(self._payload([(combo, 2)])).data["id"]
+
+        self._rechazar(pedido_id, "Producto en mal estado hoy")
+
+        self.inv_limonada.refresh_from_db()
+        self.assertEqual(self.inv_limonada.stock_actual, 20)
+
+    def test_motivo_obligatorio_de_al_menos_10_caracteres(self):
+        pedido_id = self._pedir(self._payload()).data["id"]
+
+        for motivo in ("", "   ", "Muy corto", "  123456789  "):
+            with self.subTest(motivo=motivo):
+                respuesta = self._rechazar(pedido_id, motivo)
+                self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("motivo", respuesta.data)
+
+        self.assertEqual(Pedido.objects.get(pk=pedido_id).estado, EstadoPedido.RECIBIDO)
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 18)
+
+    def test_solo_pedidos_entrantes(self):
+        pedido_id = self._pedir(self._payload()).data["id"]
+        Pedido.objects.filter(pk=pedido_id).update(estado=EstadoPedido.EN_PREPARACION)
+
+        respuesta = self._rechazar(pedido_id, "Cliente pidió cancelar")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Recibido", respuesta.data["detail"])
+
+    def test_aceptar_lo_pasa_a_cocina(self):
+        pedido_id = self._pedir(self._payload()).data["id"]
+
+        respuesta = self.client.patch(
+            reverse("pedido_estado", args=[pedido_id]), {"estado": "en_preparacion"},
+            format="json", **self._auth(self.operador),
+        )
+
+        self.assertEqual(respuesta.data["estado"], "en_preparacion")
+
+    def test_cocina_cliente_y_operador_ajeno_no_rechazan(self):
+        pedido_id = self._pedir(self._payload()).data["id"]
+        cocina = User.objects.create_user(
+            negocio=negocio_prueba(), email="cocina.r@example.com", password=PASSWORD,
+            nombre="C", apellido="R", telefono="3000000000", rol=Rol.COCINA,
+        )
+        SedeUsuario.objects.create(usuario=cocina, sede=self.sede)
+        ajeno = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.ajeno@example.com", password=PASSWORD,
+            nombre="O", apellido="A", telefono="3000000000", rol=Rol.OPERADOR,
+        )
+
+        for usuario in (cocina, self.cliente, ajeno):
+            with self.subTest(usuario=usuario.email):
+                self.assertEqual(
+                    self._rechazar(pedido_id, "Motivo suficientemente largo", usuario).status_code,
+                    status.HTTP_403_FORBIDDEN,
+                )

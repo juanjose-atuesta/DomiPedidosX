@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import AdminLayout from "../../layouts/AdminLayout"
 import Boton from "../../components/Boton"
+import Interruptor from "../../components/Interruptor"
 import CampoSelect from "../../components/CampoSelect"
 import CampoTexto from "../../components/CampoTexto"
 import EtiquetaEstado from "../../components/EtiquetaEstado"
@@ -22,6 +23,7 @@ const FORMULARIO_VACIO = {
   direccion: "",
   latitud: "",
   longitud: "",
+  asignacionAutomatica: false,
 }
 
 export default function FormularioSede() {
@@ -56,6 +58,7 @@ export default function FormularioSede() {
           direccion: datos.direccion ?? "",
           latitud: datos.latitud ?? "",
           longitud: datos.longitud ?? "",
+          asignacionAutomatica: Boolean(datos.asignacion_automatica_repartidor),
         })
         setHorarios(
           (datos.horarios ?? []).map((horario) => ({
@@ -113,6 +116,7 @@ export default function FormularioSede() {
         direccion: formulario.direccion.trim(),
         latitud: formulario.latitud === "" ? null : formulario.latitud,
         longitud: formulario.longitud === "" ? null : formulario.longitud,
+        asignacion_automatica_repartidor: formulario.asignacionAutomatica,
         horarios: horarios.map((horario) => ({
           dia_semana: Number(horario.dia_semana),
           hora_apertura: horario.hora_apertura,
@@ -282,8 +286,28 @@ export default function FormularioSede() {
             </div>
 
             <MensajeAlerta tipo="info">
-              La sede solo recibirá pedidos dentro de estos horarios.
+              La sede solo recibirá pedidos dentro de estos horarios y no
+              los recibirá en sus feriados.
             </MensajeAlerta>
+
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-borde px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold text-texto">
+                  Asignación automática de repartidores
+                </p>
+                <p className="text-xs text-texto-sec">
+                  Al quedar listo un domicilio, se asigna al repartidor
+                  disponible con menos pedidos en el día.
+                </p>
+              </div>
+              <Interruptor
+                activo={formulario.asignacionAutomatica}
+                onChange={(activo) =>
+                  setFormulario((actual) => ({ ...actual, asignacionAutomatica: activo }))
+                }
+                etiqueta="Asignación automática de repartidores"
+              />
+            </div>
 
             {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
 

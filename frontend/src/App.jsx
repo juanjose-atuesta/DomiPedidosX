@@ -4,6 +4,8 @@ import CrearCuentaPersonal from "./pages/admin/CrearCuentaPersonal"
 import Sedes from "./pages/admin/Sedes"
 import FormularioSede from "./pages/admin/FormularioSede"
 import ZonasSede from "./pages/admin/ZonasSede"
+import Feriados from "./pages/admin/Feriados"
+import Correos from "./pages/admin/Correos"
 import Categorias from "./pages/operador/Categorias"
 import Productos from "./pages/operador/Productos"
 import FormularioProducto from "./pages/operador/FormularioProducto"
@@ -101,6 +103,22 @@ export default function App() {
         element={
           <RutaProtegida roles={ADMIN}>
             <ZonasSede />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/feriados"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <Feriados />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/correos"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <Correos />
           </RutaProtegida>
         }
       />

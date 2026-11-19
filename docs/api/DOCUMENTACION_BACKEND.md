@@ -28,14 +28,15 @@ Los permisos reutilizables están en `apps/core/permissions.py`.
 |---|---|---|
 | `negocios` | Modelo `Negocio` | No; se crea con el registro de negocio y se administra en el admin de Django |
 | `usuarios` | Cuentas, JWT, bloqueo de login, activación de personal, direcciones | Sí |
-| `sedes` | Sedes y horarios | Sí |
+| `sedes` | Sedes, horarios y feriados | Sí |
 | `menu` | Categorías, productos, opciones, combos | Sí |
 | `inventario` | Disponibilidad y existencias por sede | Sí |
 | `promociones` | Promociones con vigencia y cupo | Sí |
 | `pedidos` | Pedidos, detalle e historial de estados | Sí |
-| `notificaciones` | Alertas de stock bajo | No; las genera el descuento de inventario |
+| `notificaciones` | Alertas de panel (stock bajo, pedido sin repartidor), correos al cliente y su configuración por evento | Sí, la configuración de correos |
 | `cobertura` | Zonas de cobertura (radio o polígono) y capacidad por franja | Sí, las zonas. La capacidad aún no |
-| `repartos`, `reportes` | Reservadas | No |
+| `repartos` | Estado de los repartidores y asignación manual o automática | Sí |
+| `reportes` | Reservada | No |
 
 ### 1.2 Modelo multi-negocio (multi-tenant)
 
@@ -270,6 +271,9 @@ No hay endpoints de `Negocio`: se crea con el registro público y se administra 
 | PUT, PATCH | `/sedes/{id}/` | Admin | Actualiza una sede del negocio |
 | DELETE | `/sedes/{id}/` | Admin | Desactiva la sede (`activa=False`); no la borra |
 | POST | `/sedes/{id}/reactivar/` | Admin | Reactiva la sede |
+| GET | `/sedes/feriados/[?desde=AAAA-MM-DD]` | Admin, Operador | Feriados del negocio |
+| POST | `/sedes/feriados/` | Admin | Crea un feriado. Cuerpo: `fecha`, `nombre`, `sedes_ids` (opcional) |
+| GET, PUT, PATCH, DELETE | `/sedes/feriados/{id}/` | Admin | Consulta, edita o elimina un feriado del negocio |
 
 ```jsonc
 // POST /api/sedes/
@@ -288,6 +292,9 @@ No hay endpoints de `Negocio`: se crea con el registro público y se administra 
 - `dia_semana` va de 1 (lunes) a 7 (domingo), y la hora de cierre debe ser posterior a la de apertura.
 - La respuesta incluye `negocio_id` y `negocio_nombre`, que el cliente usa para distinguir sedes de restaurantes distintos.
 - **Los horarios se validan al pedir:** una sede sin un tramo abierto en este momento no recibe pedidos.
+- `asignacion_automatica_repartidor` (booleano, por defecto `false`) activa la asignación automática de repartidores. El admin lo cambia aquí; el operador, con `PATCH /repartos/sedes/{id}/configuracion/`.
+
+**Feriados (HU-8.9).** Un feriado pertenece al negocio. Con `sedes_ids` vacío o ausente cierra **todas** sus sedes (`aplica_a_todas: true`); con sedes, solo esas. Las sedes deben ser del mismo negocio (400 si no). Ese día, crear o cotizar un pedido en una sede afectada responde con el mensaje exacto **"Sede cerrada por feriado"**.
 
 ### 3.2.1 Zonas de cobertura
 
@@ -419,6 +426,7 @@ El modelo se llama `InventarioSede` (tabla `inventario_inventariosede`).
 | POST | `/pedidos/cotizar/` | Cliente, Operador, Admin | Mismo cuerpo que crear: devuelve el desglose sin guardar nada |
 | PATCH | `/pedidos/{id}/estado/` | Cocina, Operador, Repartidor, Admin | Avanza el estado. Cuerpo: `estado` y `comentario` opcional |
 | POST | `/pedidos/{id}/cancelar/` | Cliente (dueño del pedido) | Cancela el pedido si está en `recibido`. Cuerpo: `motivo` opcional |
+| POST | `/pedidos/{id}/rechazar/` | Operador, Admin de la sede | Rechaza un pedido entrante (`recibido`). Cuerpo: `motivo`, mínimo 10 caracteres |
 
 `estado` admite varios valores separados por coma: `?estado=recibido,en_preparacion`.
 
@@ -465,6 +473,7 @@ Reglas:
 - Precios y totales se calculan en el servidor. Nombres y precios se guardan como copia, para que el historial no cambie si se edita el menú.
 - **`costo_domicilio` y `descuento` no se reciben:** si vienen en la petición se ignoran.
 - **Validaciones del servidor**, en este orden (el primer problema se devuelve como `{"detail": "..."}` con 400):
+  0. Hoy no es feriado para la sede. Si lo es: **"Sede cerrada por feriado"**.
   1. La sede está abierta según su horario de hoy. Si no: "La sede X está cerrada en este momento. Hoy atiende de 08:00 a 20:00." o "La sede X no atiende hoy."
   2. A domicilio, el punto cae en una zona activa de la sede. Si no: **"Tu dirección está fuera de la zona de cobertura"**.
   3. A domicilio, el subtotal alcanza el `pedido_minimo` de la zona. Si no: "El pedido mínimo para tu zona (Centro) es $20.000. Te faltan $5.000."
@@ -526,7 +535,14 @@ Se envía `codigo_promocion` (sin distinguir mayúsculas) o `promocion_id`. Solo
 - Solo el cliente dueño del pedido; para cualquier otro cliente el pedido no existe (404). El personal recibe 403.
 - Solo en estado `recibido`; en otro estado responde 400 y no cambia nada.
 - Pasa a `cancelado`, guarda `motivo_cancelacion` (o "Cancelado por el cliente."), **devuelve las existencias** al inventario de la sede (los combos devuelven sus componentes) y deja la fila en `HistorialEstado`.
-- Las respuestas de pedidos incluyen `puede_cancelar`, `motivo_cancelacion`, `zona_nombre` y `promocion_nombre`.
+- Las respuestas de pedidos incluyen `puede_cancelar`, `motivo_cancelacion`, `zona_nombre`, `promocion_nombre`, `repartidor_id`, `repartidor_nombre`, `esperando_repartidor` (domicilio listo sin repartidor) y `asignacion_automatica` (de la sede).
+
+#### Aceptar o rechazar un pedido entrante (HU-6.2)
+
+- **Aceptar** es pasarlo a cocina: `PATCH /pedidos/{id}/estado/` con `{"estado": "en_preparacion"}`.
+- **Rechazar**: `POST /pedidos/{id}/rechazar/` con `{"motivo": "..."}`. El motivo es obligatorio y debe tener al menos 10 caracteres sin contar espacios a los extremos (400 si no).
+- Solo el operador o el admin que gestionan la sede (403 para cocina, clientes u otras sedes) y solo en estado `recibido`.
+- Hace lo mismo que la cancelación del cliente: pasa a `cancelado`, devuelve las existencias (combos expandidos), libera el cupo de la promoción y deja en `HistorialEstado` el comentario "Rechazado por la sede: <motivo>". El cliente ve el motivo en `motivo_cancelacion`.
 
 #### Flujo de estados
 
@@ -538,7 +554,7 @@ stateDiagram-v2
     listo_despacho --> entregado: tipo recoger
     listo_despacho --> en_camino: tipo domicilio
     en_camino --> entregado
-    recibido --> cancelado: el cliente cancela
+    recibido --> cancelado: el cliente cancela o la sede rechaza
     entregado --> [*]
     cancelado --> [*]
 ```
@@ -550,7 +566,7 @@ stateDiagram-v2
 | `listo_despacho` | Listo para recoger o despachar |
 | `en_camino` | El domicilio salió a entrega |
 | `entregado` | Finalizado |
-| `cancelado` | Cancelado por el cliente mientras estaba en `recibido` |
+| `cancelado` | Cancelado por el cliente o rechazado por la sede mientras estaba en `recibido` |
 
 - La regla vive en `estados_siguientes()`. Las respuestas incluyen `estados_siguientes`, para que el frontend no la duplique.
 - Una transición inválida responde 400 y no cambia nada.
@@ -558,25 +574,55 @@ stateDiagram-v2
 - El cambio de estado toma un bloqueo de fila (`select_for_update`).
 - Cocina, operador y admin pueden hacer cualquier transición válida dentro de su alcance; la regla no distingue entre ellos.
 
-#### Asignación de repartidores
+#### Asignación de repartidores (HU-6.5 y HU-6.6)
 
-No hay asignación manual ni automática: **cada repartidor toma el pedido**.
+| Método | Ruta | Acceso | Descripción |
+|---|---|---|---|
+| GET | `/repartos/sedes/{sede_id}/repartidores/` | Operador, Admin de la sede | Repartidores de la sede con `estado` (`disponible` u `ocupado`), `pedidos_hoy` y `pedidos_en_curso`, más `asignacion_automatica_repartidor` |
+| POST | `/repartos/pedidos/{id}/asignar/` | Operador, Admin de la sede | Asignación manual. Cuerpo: `{"repartidor_id": "uuid"}` |
+| PATCH | `/repartos/sedes/{sede_id}/configuracion/` | Operador, Admin de la sede | `{"asignacion_automatica_repartidor": true}`. Al activarlo se reparten de inmediato los domicilios que esperaban |
 
-1. Un domicilio en `listo_despacho` aparece a todos los repartidores de la sede.
-2. Al pasarlo a `en_camino`, queda a su nombre en `Pedido.repartidor`.
-3. Deja de ser visible para los demás; si otro lo intenta cambiar, recibe 404.
-4. Quien lo lleva lo marca como `entregado`.
+**Disponible u ocupado.** Es `PerfilRepartidor.disponible`. Un repartidor nuevo nace disponible. Queda **ocupado** al recibir un pedido (asignación manual, automática o tomándolo él mismo) y vuelve a **disponible** cuando entrega y ya no lleva ningún domicilio en `listo_despacho` o `en_camino`.
 
-Si dos repartidores lo toman a la vez, el bloqueo de fila deja pasar al primero y rechaza al segundo con 400. Si un operador despacha el pedido, sigue sin repartidor y el primero que lo marque como entregado queda asignado.
+**Asignación manual.** Solo a domicilios en `listo_despacho`, y solo con repartidores activos de esa sede que estén disponibles (400 si está ocupado o es de otra sede). Reasignar libera al repartidor anterior. Queda una fila en `HistorialEstado` ("Repartidor X asignado manualmente.").
+
+**Asignación automática.** Si la sede la tiene activa, al pasar un domicilio a `listo_despacho` se asigna al repartidor disponible de la sede con **menos pedidos en el día** (asignados o entregados, sin contar cancelados); en empate, por nombre.
+
+- Si no hay nadie disponible, el pedido queda pendiente (`esperando_repartidor: true`) y se crea una notificación de panel `sin_repartidor` para la sede.
+- Cuando un repartidor de esa sede entrega y queda libre, recibe automáticamente el pendiente más antiguo.
+
+**El repartidor también puede tomar un pedido.** Un domicilio listo sin repartidor sigue visible para todos los repartidores de la sede, y el primero que lo pasa a `en_camino` queda a su nombre (el bloqueo de fila rechaza al segundo con 400). Un pedido ya asignado solo lo ve y lo mueve su repartidor; para los demás es 404.
 
 Un repartidor no puede mover pedidos que siguen en cocina, ni pedidos para recoger, ni pedidos de otras sedes.
+
+### 3.5 Correos al cliente (HU-8.10)
+
+| Método | Ruta | Acceso | Descripción |
+|---|---|---|---|
+| GET, PATCH | `/notificaciones/configuracion-correos/` | Admin | Activa o desactiva cada evento para todo el negocio |
+
+```jsonc
+// GET /api/notificaciones/configuracion-correos/   (todos activados por defecto)
+{ "confirmacion": true, "cambio_estado": true, "cancelacion": true,
+  "asignacion_repartidor": true, "actualizado_en": "..." }
+```
+
+| Evento | Cuándo se envía |
+|---|---|
+| `confirmacion` | Al crear el pedido |
+| `cambio_estado` | En cada avance: en preparación, listo, en camino, entregado |
+| `cancelacion` | Cuando el cliente cancela o la sede rechaza (incluye el motivo) |
+| `asignacion_repartidor` | Cuando el pedido recibe repartidor (manual o automático) |
+
+- Se envían con el backend de correo de Django al **cliente del pedido**. No se envían si el pedido no tiene cliente o si el cliente fue registrado sin correo.
+- Se envían al confirmar la transacción (`transaction.on_commit`): si la operación falla, no sale ningún correo.
+- Cada envío queda en `Notificacion` (canal `correo`) con `estado_envio` `enviado` o `fallido`. Un fallo del correo no revierte el pedido.
 
 ## 4. Limitaciones conocidas
 
 | Tema | Estado actual |
 |---|---|
 | Registro público | No verifica el correo del cliente al registrarse |
-| Feriados | Solo existe el modelo; no se validan al pedir |
 | Capacidad | Solo existe el modelo `CapacidadFranja`; no se valida al pedir (Sprint 5) |
 | Correo | Se usa el backend de consola de Django; para enviar correos reales hay que configurar SMTP |
 | Administración de negocios | Desactivar un negocio solo es posible desde el admin de Django |
@@ -589,6 +635,6 @@ cd backend
 .venv/bin/python -m pytest -q
 ```
 
-Incluyen aislamiento entre negocios, permisos por rol, flujo de estados, descuento y devolución de inventario, reparto, bloqueo de login, activación de personal, cobertura por radio y polígono, pedido mínimo, horario, promociones con cupo diario, cancelación y registro rápido de clientes.
+Incluyen aislamiento entre negocios, permisos por rol, flujo de estados, descuento y devolución de inventario, reparto (asignación manual, automática por menor carga y liberación), rechazo con motivo, feriados, correos por evento, bloqueo de login, activación de personal, cobertura por radio y polígono, pedido mínimo, horario, promociones con cupo diario, cancelación y registro rápido de clientes.
 
 Las pruebas que crean pedidos usan `habilitar_sede_para_pedidos(sede)` (`apps/core/datos_prueba.py`): deja la sede abierta todo el día y con una zona de 50 km alrededor del punto de prueba.

@@ -45,6 +45,7 @@ def crear_sede(
     latitud=None,
     longitud=None,
     horarios=None,
+    asignacion_automatica_repartidor=False,
 ):
     """Crea una sede y sus horarios de atención dentro de una transacción."""
     horarios = horarios or []
@@ -58,6 +59,7 @@ def crear_sede(
             telefono=telefono or "",
             latitud=latitud,
             longitud=longitud,
+            asignacion_automatica_repartidor=asignacion_automatica_repartidor,
         )
         HorarioAtencion.objects.bulk_create(
             [
@@ -73,7 +75,14 @@ def actualizar_sede(sede, *, datos_sede, horarios=None):
     with transaction.atomic():
         campos_actualizados = {}
 
-        for campo in ("nombre", "direccion", "telefono", "latitud", "longitud"):
+        for campo in (
+            "nombre",
+            "direccion",
+            "telefono",
+            "latitud",
+            "longitud",
+            "asignacion_automatica_repartidor",
+        ):
             if campo not in datos_sede:
                 continue
             valor = datos_sede[campo]
