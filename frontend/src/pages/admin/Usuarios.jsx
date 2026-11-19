@@ -10,6 +10,7 @@ import {
   cambiarRolUsuario,
   desactivarUsuario,
   listarUsuarios,
+  reenviarActivacion,
 } from "../../api/usuarios"
 import { mensajeDeError } from "../../utils/errores"
 import { etiquetaRol, OPCIONES_ROL } from "../../utils/roles"
@@ -94,6 +95,21 @@ export default function Usuarios() {
     }
   }
 
+  const reenviar = async (usuario) => {
+    if (procesando) return
+    setProcesando(true)
+    setError("")
+    setMensaje("")
+    try {
+      await reenviarActivacion(usuario.id)
+      setMensaje(`Enviamos un enlace de activación nuevo a ${usuario.email}.`)
+    } catch (err) {
+      setError(mensajeDeError(err, "No se pudo reenviar el enlace."))
+    } finally {
+      setProcesando(false)
+    }
+  }
+
   const confirmarDesactivar = async () => {
     if (!modal?.usuario || procesando) return
 
@@ -157,6 +173,19 @@ export default function Usuarios() {
                       {esUsuarioActual && (
                         <span className="ml-2 text-xs text-texto-sec">
                           (tú)
+                        </span>
+                      )}
+                      {usuario.activacion_pendiente && (
+                        <span className="block text-xs text-ambar">
+                          Activación pendiente ·{" "}
+                          <button
+                            type="button"
+                            className="font-semibold underline disabled:opacity-50"
+                            disabled={procesando}
+                            onClick={() => reenviar(usuario)}
+                          >
+                            Reenviar enlace
+                          </button>
                         </span>
                       )}
                     </p>

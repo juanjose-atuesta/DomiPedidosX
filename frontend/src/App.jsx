@@ -3,6 +3,7 @@ import Usuarios from "./pages/admin/Usuarios"
 import CrearCuentaPersonal from "./pages/admin/CrearCuentaPersonal"
 import Sedes from "./pages/admin/Sedes"
 import FormularioSede from "./pages/admin/FormularioSede"
+import ZonasSede from "./pages/admin/ZonasSede"
 import Categorias from "./pages/operador/Categorias"
 import Productos from "./pages/operador/Productos"
 import FormularioProducto from "./pages/operador/FormularioProducto"
@@ -24,6 +25,7 @@ import AgregarDireccion from "./pages/cliente/AgregarDireccion"
 import Bienvenida from "./pages/auth/Bienvenida"
 import Login from "./pages/auth/Login"
 import RecuperarContrasena from "./pages/auth/RecuperarContrasena"
+import ActivarCuenta from "./pages/auth/ActivarCuenta"
 import Registro from "./pages/auth/Registro"
 import Inicio from "./pages/cliente/Inicio"
 import Producto from "./pages/cliente/Producto"
@@ -48,6 +50,7 @@ export default function App() {
       <Route path="/iniciar-sesion" element={<Navigate to="/login" replace />} />
       <Route path="/bienvenida" element={<Bienvenida />} />
       <Route path="/recuperar-contrasena" element={<RecuperarContrasena />} />
+      <Route path="/activar-cuenta/:token" element={<ActivarCuenta />} />
       <Route path="/registro" element={<Registro />} />
       <Route path="/registro-restaurante" element={<RegistroRestaurante />} />
       <Route path="/registro-administrador" element={<RegistroAdministrador />} />
@@ -90,6 +93,14 @@ export default function App() {
         element={
           <RutaProtegida roles={ADMIN}>
             <FormularioSede />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/sedes/:id/zonas"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <ZonasSede />
           </RutaProtegida>
         }
       />

@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.core.permissions import (
     EsAdmin,
+    EsCliente,
     EsCocina,
     EsOperador,
     EsRepartidor,
@@ -29,6 +30,9 @@ from .serializers import (
     RegistroNegocioSerializer,
     DireccionSerializer,
     RolSerializer,
+    ActivarCuentaSerializer,
+    DesactivarCuentaSerializer,
+    RegistroRapidoClienteSerializer,
 )
 from .services import (
     registrar_cliente,
@@ -39,6 +43,12 @@ from .services import (
     actualizar_perfil_usuario,
     desactivar_direccion,
     guardar_direccion,
+    activacion_pendiente,
+    activar_cuenta,
+    desactivar_cuenta_cliente,
+    enviar_enlace_activacion,
+    obtener_token_activacion,
+    registrar_cliente_rapido,
 )
 
 User = get_user_model()
@@ -130,10 +140,95 @@ class RegistroPersonalView(APIView):
             )
         return Response(
             {
-                "mensaje": "Usuario de personal registrado exitosamente",
+                "mensaje": (
+                    "Usuario de personal registrado. Le enviamos un enlace "
+                    "a su correo para que defina su contraseña (vence en 24 horas)."
+                ),
                 "usuario": PersonalSerializer(usuario).data,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class ActivarCuentaView(APIView):
+    """El empleado define su contraseña con el enlace que recibió por correo."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request, token):
+        # Permite a la pantalla saludar al empleado o avisar que el enlace venció.
+        try:
+            registro = obtener_token_activacion(token)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        usuario = registro.usuario
+        return Response(
+            {
+                "nombre": usuario.nombre,
+                "email": usuario.email,
+                "rol": usuario.rol,
+                "expira_en": registro.expira_en,
+            }
+        )
+
+    def post(self, request, token=None):
+        datos = dict(request.data.items())
+        if token:
+            datos["token"] = token
+        serializer = ActivarCuentaSerializer(data=datos)
+        serializer.is_valid(raise_exception=True)
+        try:
+            activar_cuenta(**serializer.validated_data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except DjangoValidationError as exc:
+            return Response(
+                {"password": list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(
+            {"mensaje": "Cuenta activada. Ya puedes iniciar sesión."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ReenviarActivacionView(APIView):
+    """El admin reenvía el enlace a un empleado que aún no activó su cuenta."""
+
+    permission_classes = [EsAdmin]
+
+    def post(self, request, pk):
+        usuario = _usuario_gestionable(request, pk)
+        if not usuario.is_active or not activacion_pendiente(usuario):
+            return Response(
+                {"detail": "Esta cuenta ya está activada o está desactivada."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        enviar_enlace_activacion(usuario)
+        return Response({"mensaje": "Enlace de activación reenviado."})
+
+
+class DesactivarMiCuentaView(APIView):
+    """El cliente desactiva su propia cuenta (HU-1.10)."""
+
+    permission_classes = [EsCliente]
+
+    def patch(self, request):
+        serializer = DesactivarCuentaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not request.user.check_password(serializer.validated_data["password"]):
+            return Response(
+                {"password": ["La contraseña no es correcta."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        desactivar_cuenta_cliente(request.user)
+        return Response(
+            {
+                "mensaje": (
+                    "Tu cuenta fue desactivada. Tus pedidos en curso se "
+                    "entregarán normalmente."
+                )
+            }
         )
 
 class SolicitarPasswordResetView(APIView):
@@ -276,7 +371,9 @@ class DireccionDetailView(APIView):
 
 
 class ClienteBusquedaView(APIView):
-    """Busca clientes activos para registrar pedidos a su nombre.
+    """GET: busca clientes activos. POST: registro rápido (HU-5.9).
+
+    Busca clientes activos para registrar pedidos a su nombre.
 
     Los clientes no pertenecen a un negocio, así que solo se listan los que ya le
     han comprado. A uno nuevo se le encuentra con su correo o teléfono exactos,
@@ -314,6 +411,19 @@ class ClienteBusquedaView(APIView):
             .order_by("nombre", "apellido")[: self.LIMITE_RESULTADOS]
         )
         return Response(ClienteBusquedaSerializer(clientes, many=True).data)
+
+    def post(self, request):
+        exigir_negocio(request.user)
+        serializer = RegistroRapidoClienteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            cliente = registrar_cliente_rapido(**serializer.validated_data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        cliente.direcciones_activas = []
+        return Response(
+            ClienteBusquedaSerializer(cliente).data, status=status.HTTP_201_CREATED
+        )
 
 
 # ==========================================

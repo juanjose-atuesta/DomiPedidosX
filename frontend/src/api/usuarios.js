@@ -28,3 +28,14 @@ export async function buscarClientes(q = "") {
   })
   return data
 }
+
+export async function reenviarActivacion(id) {
+  const { data } = await api.post(`/usuarios/usuarios/${id}/reenviar-activacion/`)
+  return data
+}
+
+// Alta rápida de un cliente desde el panel del operador (correo opcional).
+export async function registrarClienteRapido(datos) {
+  const { data } = await api.post("/usuarios/clientes/", datos)
+  return data
+}

@@ -6,7 +6,9 @@ import MensajeAlerta from "../../components/MensajeAlerta"
 import ModalConfirmacion from "../../components/ModalConfirmacion"
 import { Candado } from "../../components/Iconos"
 import { fondoPerfil, iconoBolsaNaranja } from "../../assets"
+import { desactivarMiCuenta } from "../../api/auth"
 import { useAuth } from "../../context/auth-context"
+import { mensajeDeError } from "../../utils/errores"
 
 const FONDO = {
   backgroundImage: `${fondoPerfil ? `url(${fondoPerfil}), ` : ""}linear-gradient(to bottom, #ffffff, #fce3c8)`,
@@ -23,6 +25,9 @@ export default function Perfil() {
   const [apellido, setApellido] = useState(usuario?.apellido ?? "")
   const [telefono, setTelefono] = useState(usuario?.telefono ?? "")
   const [eliminando, setEliminando] = useState(false)
+  const [claveDesactivar, setClaveDesactivar] = useState("")
+  const [errorDesactivar, setErrorDesactivar] = useState("")
+  const [desactivando, setDesactivando] = useState(false)
   const [mensaje, setMensaje] = useState(null)
   const [guardando, setGuardando] = useState(false)
 
@@ -48,6 +53,30 @@ export default function Perfil() {
       setMensaje({ tipo: "error", texto: "No pudimos guardar los cambios. Intenta de nuevo." })
     } finally {
       setGuardando(false)
+    }
+  }
+
+  const cerrarDesactivar = () => {
+    if (desactivando) return
+    setEliminando(false)
+    setClaveDesactivar("")
+    setErrorDesactivar("")
+  }
+
+  const desactivar = async () => {
+    if (desactivando) return
+    if (!claveDesactivar) {
+      setErrorDesactivar("Escribe tu contraseña para confirmar")
+      return
+    }
+    setDesactivando(true)
+    setErrorDesactivar("")
+    try {
+      await desactivarMiCuenta(claveDesactivar)
+      logout()
+    } catch (err) {
+      setErrorDesactivar(mensajeDeError(err, "No pudimos desactivar tu cuenta."))
+      setDesactivando(false)
     }
   }
 
@@ -129,19 +158,28 @@ export default function Perfil() {
           onClick={() => setEliminando(true)}
           className="text-base font-semibold text-primario hover:underline"
         >
-          Eliminar cuenta
+          Desactivar cuenta
         </button>
       </div>
 
 
       <ModalConfirmacion
         abierto={eliminando}
-        titulo="¿Eliminar cuenta?"
-        texto="Se eliminarán tus datos personales y tus direcciones guardadas. Esta acción no se puede deshacer."
-        textoConfirmar="Eliminar cuenta"
-        onConfirmar={() => setEliminando(false)}
-        onCancelar={() => setEliminando(false)}
-      />
+        titulo="¿Desactivar tu cuenta?"
+        texto="No podrás volver a iniciar sesión. Tus pedidos en curso se entregarán normalmente y tu historial se conserva."
+        textoConfirmar={desactivando ? "Desactivando…" : "Desactivar cuenta"}
+        onConfirmar={desactivar}
+        onCancelar={cerrarDesactivar}
+      >
+        <CampoTexto
+          etiqueta="Confirma con tu contraseña"
+          type="password"
+          value={claveDesactivar}
+          error={errorDesactivar}
+          onChange={(e) => setClaveDesactivar(e.target.value)}
+          autoComplete="current-password"
+        />
+      </ModalConfirmacion>
     </ClienteLayout>
   )
 }

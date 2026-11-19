@@ -105,6 +105,10 @@ erDiagram
     usuarios_perfilrepartidor {
         uuid usuario_id PK, FK
     }
+    usuarios_tokenactivacion {
+        bigint id PK
+        uuid usuario_id FK
+    }
     usuarios_user {
         uuid id PK
         uuid negocio_id FK
@@ -149,3 +153,4 @@ erDiagram
     usuarios_user ||--o{ sedes_sedeusuario : "usuario_id"
     usuarios_user ||--o{ usuarios_direccion : "cliente_id"
     usuarios_user ||--o| usuarios_perfilrepartidor : "usuario_id"
+    usuarios_user ||--o{ usuarios_tokenactivacion : "usuario_id"

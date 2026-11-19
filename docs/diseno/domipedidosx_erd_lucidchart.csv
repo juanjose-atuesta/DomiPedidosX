@@ -214,3 +214,11 @@ postgresql,domipedidosx,public,usuarios_user,rol,11,character varying,20,,,,
 postgresql,domipedidosx,public,usuarios_user,is_active,12,boolean,,,,,
 postgresql,domipedidosx,public,usuarios_user,is_staff,13,boolean,,,,,
 postgresql,domipedidosx,public,usuarios_user,negocio_id,14,uuid,,FOREIGN KEY,public,negocios_negocio,id
+postgresql,domipedidosx,public,usuarios_user,intentos_fallidos,15,smallint,,,,,
+postgresql,domipedidosx,public,usuarios_user,bloqueado_hasta,16,timestamp with time zone,,,,,
+postgresql,domipedidosx,public,usuarios_tokenactivacion,id,1,bigint,,PRIMARY KEY,,,
+postgresql,domipedidosx,public,usuarios_tokenactivacion,token_hash,2,character varying,64,UNIQUE,,,
+postgresql,domipedidosx,public,usuarios_tokenactivacion,creado_en,3,timestamp with time zone,,,,,
+postgresql,domipedidosx,public,usuarios_tokenactivacion,expira_en,4,timestamp with time zone,,,,,
+postgresql,domipedidosx,public,usuarios_tokenactivacion,usado_en,5,timestamp with time zone,,,,,
+postgresql,domipedidosx,public,usuarios_tokenactivacion,usuario_id,6,uuid,,FOREIGN KEY,public,usuarios_user,id

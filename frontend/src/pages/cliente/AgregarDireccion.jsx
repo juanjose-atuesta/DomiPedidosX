@@ -14,7 +14,8 @@ import {
   crearDireccion,
   listarDirecciones,
 } from "../../api/direcciones"
-import { COBERTURA, estaEnCobertura } from "../../data/cobertura"
+import { verificarCobertura } from "../../api/cobertura"
+import { CENTRO_MAPA } from "../../data/cobertura"
 import { mensajeDeError } from "../../utils/errores"
 
 const DECIMALES_COORDENADA = 6
@@ -25,25 +26,36 @@ function Formulario({ id, existente, volverA }) {
   const [direccionTexto, setDireccionTexto] = useState(existente?.direccion_texto ?? "")
   const [detalles, setDetalles] = useState(existente?.detalles ?? "")
   const [posicion, setPosicion] = useState(
-    existente ? [Number(existente.latitud), Number(existente.longitud)] : COBERTURA.centro,
+    existente ? [Number(existente.latitud), Number(existente.longitud)] : CENTRO_MAPA,
   )
   const [elegida, setElegida] = useState(Boolean(existente))
   const [usarUbicacion, setUsarUbicacion] = useState(false)
   const [principal, setPrincipal] = useState(existente?.es_principal ?? false)
   const [fueraDeCobertura, setFueraDeCobertura] = useState(false)
+  const [verificando, setVerificando] = useState(false)
   const [errorUbicacion, setErrorUbicacion] = useState("")
   const [error, setError] = useState("")
   const [guardando, setGuardando] = useState(false)
 
-  const seleccionar = (nuevaPosicion) => {
-    if (!estaEnCobertura(nuevaPosicion)) {
-      setFueraDeCobertura(true)
+  // Solo se aceptan puntos a los que llega al menos una sede (zonas del backend).
+  const seleccionar = async (nuevaPosicion) => {
+    setVerificando(true)
+    try {
+      const { cubierta } = await verificarCobertura(nuevaPosicion)
+      if (!cubierta) {
+        setFueraDeCobertura(true)
+        return false
+      }
+      setPosicion(nuevaPosicion)
+      setElegida(true)
+      setError("")
+      return true
+    } catch (err) {
+      setError(mensajeDeError(err, "No pudimos verificar la cobertura de ese punto."))
       return false
+    } finally {
+      setVerificando(false)
     }
-    setPosicion(nuevaPosicion)
-    setElegida(true)
-    setError("")
-    return true
   }
 
   const alternarUbicacion = (valor) => {
@@ -58,8 +70,8 @@ function Formulario({ id, existente, volverA }) {
     }
 
     navigator.geolocation.getCurrentPosition(
-      (p) => {
-        if (!seleccionar([p.coords.latitude, p.coords.longitude])) setUsarUbicacion(false)
+      async (p) => {
+        if (!(await seleccionar([p.coords.latitude, p.coords.longitude]))) setUsarUbicacion(false)
       },
       () => {
         setUsarUbicacion(false)
@@ -133,7 +145,11 @@ function Formulario({ id, existente, volverA }) {
           </span>
           <div>
             <p className="text-base font-semibold text-black">
-              {elegida ? "Punto de entrega marcado" : "Toca el mapa para marcar el punto"}
+              {verificando
+                ? "Verificando cobertura…"
+                : elegida
+                  ? "Punto de entrega marcado"
+                  : "Toca el mapa para marcar el punto"}
             </p>
             {elegida && (
               <p className="text-sm text-black">
@@ -174,7 +190,7 @@ function Formulario({ id, existente, volverA }) {
       <ModalAviso
         abierto={fueraDeCobertura}
         titulo="Fuera de cobertura"
-        texto="Aún no llegamos a esta zona. Prueba con otra dirección."
+        texto="Tu dirección está fuera de la zona de cobertura. Prueba con otra dirección."
         onCerrar={() => setFueraDeCobertura(false)}
       />
     </ClienteLayout>

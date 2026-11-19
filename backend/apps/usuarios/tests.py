@@ -8,7 +8,11 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
-from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
+from apps.core.datos_prueba import (
+    habilitar_sede_para_pedidos,
+    negocio_de_rol,
+    negocio_prueba,
+)
 from apps.usuarios.models import Rol, User
 
 CLAVE = "Clave123!"
@@ -139,6 +143,7 @@ from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
@@ -148,7 +153,7 @@ from apps.menu.models import Producto
 from apps.pedidos.services import crear_pedido
 from apps.sedes.models import Sede, SedeUsuario
 
-from .models import Direccion, PerfilRepartidor, Rol, User
+from .models import Direccion, PerfilRepartidor, Rol, TokenActivacion, User
 from .serializers import LoginSerializer
 
 PASSWORD = "ClaveSegura#2024"
@@ -1055,6 +1060,7 @@ class ClienteBusquedaTests(APITestCase):
         sede = Sede.objects.create(
             negocio=self.operador.negocio, nombre="Norte", direccion="Calle 1"
         )
+        habilitar_sede_para_pedidos(sede)
         producto = Producto.objects.create(
             negocio=self.operador.negocio,
             nombre="Papas",
@@ -1119,3 +1125,386 @@ class ClienteBusquedaTests(APITestCase):
         self.assertEqual(
             self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED
         )
+
+
+class BloqueoLoginTests(APITestCase):
+    """HU-1.2: 5 intentos fallidos consecutivos bloquean la cuenta 15 minutos."""
+
+    def setUp(self):
+        self.url = reverse("login")
+        self.usuario = User.objects.create_user(
+            email="bloqueo@example.com",
+            password=PASSWORD,
+            nombre="Ana",
+            apellido="Bloqueo",
+            telefono="3000000000",
+        )
+
+    def _login(self, password):
+        return self.client.post(
+            self.url, {"email": "bloqueo@example.com", "password": password}
+        )
+
+    def _fallar(self, veces):
+        for _ in range(veces):
+            respuesta = self._login("Incorrecta#1")
+        return respuesta
+
+    def test_cuatro_fallos_no_bloquean_y_un_acierto_reinicia_el_contador(self):
+        respuesta = self._fallar(4)
+        self.assertEqual(respuesta.data["detail"], "Credenciales incorrectas")
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.intentos_fallidos, 4)
+
+        self.assertEqual(self._login(PASSWORD).status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.intentos_fallidos, 0)
+
+        # El contador es de fallos consecutivos: otros 4 tampoco bloquean.
+        self._fallar(4)
+        self.assertEqual(self._login(PASSWORD).status_code, status.HTTP_200_OK)
+
+    def test_quinto_fallo_bloquea_15_minutos_con_mensaje_claro(self):
+        respuesta = self._fallar(5)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("bloqueada temporalmente", respuesta.data["detail"])
+        self.assertIn("15 minutos", respuesta.data["detail"])
+        self.usuario.refresh_from_db()
+        restante = self.usuario.bloqueado_hasta - timezone.now()
+        self.assertTrue(timedelta(minutes=14) < restante <= timedelta(minutes=15))
+
+    def test_durante_el_bloqueo_ni_la_clave_correcta_entra(self):
+        self._fallar(5)
+
+        respuesta = self._login(PASSWORD)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("bloqueada temporalmente", respuesta.data["detail"])
+        self.assertNotIn("access", respuesta.data)
+
+    def test_al_vencer_el_bloqueo_entra_y_se_reinicia(self):
+        self._fallar(5)
+        User.objects.filter(pk=self.usuario.pk).update(
+            bloqueado_hasta=timezone.now() - timedelta(seconds=1)
+        )
+
+        self.assertEqual(self._login(PASSWORD).status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertIsNone(self.usuario.bloqueado_hasta)
+        self.assertEqual(self.usuario.intentos_fallidos, 0)
+
+    def test_correo_inexistente_no_bloquea_nada(self):
+        for _ in range(6):
+            respuesta = self.client.post(
+                self.url, {"email": "nadie@example.com", "password": "x"}
+            )
+        self.assertEqual(respuesta.data["detail"], "Credenciales incorrectas")
+
+
+class ActivacionPersonalTests(APITestCase):
+    """HU-1.4: el personal define su contraseña con un enlace de un solo uso (24 h)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            negocio=negocio_prueba(),
+            email="admin.activa@example.com",
+            password=PASSWORD,
+            nombre="Admin",
+            apellido="Activa",
+            telefono="3001111111",
+            rol=Rol.ADMIN,
+        )
+        self.sede = Sede.objects.create(
+            negocio=negocio_prueba(), nombre="Centro", direccion="Calle 1"
+        )
+        mail.outbox.clear()
+
+    def _auth(self, usuario):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {LoginSerializer.get_token(usuario).access_token}"
+        }
+
+    def _crear_personal(self, email="cocinero@example.com"):
+        return self.client.post(
+            reverse("registro_personal"),
+            {
+                "email": email,
+                "nombre": "Carlos",
+                "apellido": "Cocina",
+                "telefono": "3005555555",
+                "rol": Rol.COCINA,
+                "sedes_ids": [str(self.sede.pk)],
+            },
+            format="json",
+            **self._auth(self.admin),
+        )
+
+    def _token_del_correo(self):
+        return re.search(r"/activar-cuenta/(\S+)", mail.outbox[-1].body).group(1)
+
+    def _activar(self, token, password="NuevaClave#2026"):
+        return self.client.post(
+            reverse("activar_cuenta"),
+            {"token": token, "password": password, "password_confirmacion": password},
+            format="json",
+        )
+
+    def test_crear_personal_envia_enlace_y_la_cuenta_no_tiene_clave(self):
+        respuesta = self._crear_personal()
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(respuesta.data["usuario"]["activacion_pendiente"])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["cocinero@example.com"])
+        self.assertIn("http://localhost:5173/activar-cuenta/", mail.outbox[0].body)
+        self.assertIn("24 horas", mail.outbox[0].body)
+        usuario = User.objects.get(email="cocinero@example.com")
+        self.assertFalse(usuario.has_usable_password())
+
+    def test_activar_define_la_clave_y_permite_iniciar_sesion(self):
+        self._crear_personal()
+        token = self._token_del_correo()
+
+        datos = self.client.get(reverse("activar_cuenta_token", args=[token]))
+        self.assertEqual(datos.status_code, status.HTTP_200_OK)
+        self.assertEqual(datos.data["email"], "cocinero@example.com")
+
+        self.assertEqual(self._activar(token).status_code, status.HTTP_200_OK)
+        login = self.client.post(
+            reverse("login"),
+            {"email": "cocinero@example.com", "password": "NuevaClave#2026"},
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_el_enlace_es_de_un_solo_uso(self):
+        self._crear_personal()
+        token = self._token_del_correo()
+        self._activar(token)
+
+        respuesta = self._activar(token, "OtraClave#2027")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        usuario = User.objects.get(email="cocinero@example.com")
+        self.assertTrue(usuario.check_password("NuevaClave#2026"))
+
+    def test_el_enlace_vence_a_las_24_horas(self):
+        self._crear_personal()
+        token = self._token_del_correo()
+        registro = TokenActivacion.objects.get()
+        self.assertAlmostEqual(
+            (registro.expira_en - registro.creado_en).total_seconds(),
+            24 * 3600,
+            delta=5,
+        )
+
+        TokenActivacion.objects.update(expira_en=timezone.now() - timedelta(seconds=1))
+
+        self.assertEqual(self._activar(token).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            self.client.get(reverse("activar_cuenta_token", args=[token])).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_token_inventado_y_clave_debil_dan_400(self):
+        self._crear_personal()
+        self.assertEqual(
+            self._activar("token-inventado").status_code, status.HTTP_400_BAD_REQUEST
+        )
+        respuesta = self._activar(self._token_del_correo(), "12345678")
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", respuesta.data)
+
+    def test_reenviar_invalida_el_enlace_anterior(self):
+        self._crear_personal()
+        viejo = self._token_del_correo()
+        usuario = User.objects.get(email="cocinero@example.com")
+
+        respuesta = self.client.post(
+            reverse("reenviar-activacion", args=[usuario.pk]), **self._auth(self.admin)
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        nuevo = self._token_del_correo()
+        self.assertNotEqual(viejo, nuevo)
+        self.assertEqual(self._activar(viejo).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self._activar(nuevo).status_code, status.HTTP_200_OK)
+
+
+class DesactivarCuentaClienteTests(APITestCase):
+    """HU-1.10: el cliente desactiva su cuenta sin perder su historial."""
+
+    def setUp(self):
+        self.cliente = User.objects.create_user(
+            email="me.voy@example.com",
+            password=PASSWORD,
+            nombre="Ana",
+            apellido="Cliente",
+            telefono="3101111111",
+        )
+        self.url = reverse("desactivar_mi_cuenta")
+
+    def _auth(self, usuario):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {LoginSerializer.get_token(usuario).access_token}"
+        }
+
+    def test_desactiva_conserva_pedidos_y_bloquea_el_login(self):
+        operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.desactiva@example.com",
+            password=PASSWORD, nombre="Op", apellido="Uno",
+            telefono="3000000000", rol=Rol.OPERADOR,
+        )
+        sede = Sede.objects.create(negocio=operador.negocio, nombre="Norte", direccion="Calle 1")
+        habilitar_sede_para_pedidos(sede)
+        producto = Producto.objects.create(
+            negocio=operador.negocio, nombre="Papas",
+            precio_base=Decimal("1000.00"), tiempo_preparacion_min=5,
+        )
+        InventarioSede.objects.create(sede=sede, producto=producto, controla_stock=False)
+        pedido = crear_pedido(
+            sede=sede, cliente=self.cliente, detalles=[{"producto": producto, "cantidad": 1}]
+        )
+
+        respuesta = self.client.patch(
+            self.url, {"password": PASSWORD}, format="json", **self._auth(self.cliente)
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.cliente.refresh_from_db()
+        self.assertFalse(self.cliente.is_active)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "recibido")  # el pedido en curso sigue
+        self.assertEqual(pedido.cliente, self.cliente)
+
+        login = self.client.post(
+            reverse("login"), {"email": "me.voy@example.com", "password": PASSWORD}
+        )
+        self.assertEqual(login.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(login.data["detail"], "Cuenta desactivada")
+
+    def test_exige_la_contrasena(self):
+        respuesta = self.client.patch(
+            self.url, {"password": "mala"}, format="json", **self._auth(self.cliente)
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.cliente.refresh_from_db()
+        self.assertTrue(self.cliente.is_active)
+
+    def test_el_token_abierto_deja_de_servir(self):
+        auth = self._auth(self.cliente)
+        self.client.patch(self.url, {"password": PASSWORD}, format="json", **auth)
+
+        self.assertEqual(
+            self.client.get(reverse("usuario_me"), **auth).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_el_personal_no_usa_este_endpoint(self):
+        operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op@example.com", password=PASSWORD,
+            nombre="Op", apellido="Uno", telefono="3000000000", rol=Rol.OPERADOR,
+        )
+        respuesta = self.client.patch(
+            self.url, {"password": PASSWORD}, format="json", **self._auth(operador)
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class RegistroRapidoClienteTests(APITestCase):
+    """HU-5.9: el operador registra un cliente nuevo con nombre y teléfono."""
+
+    def setUp(self):
+        self.url = reverse("clientes_busqueda")
+        self.operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.rapido@example.com",
+            password=PASSWORD, nombre="Op", apellido="Rápido",
+            telefono="3000000000", rol=Rol.OPERADOR,
+        )
+
+    def _post(self, datos, usuario=None):
+        token = LoginSerializer.get_token(usuario or self.operador).access_token
+        return self.client.post(
+            self.url, datos, format="json", HTTP_AUTHORIZATION=f"Bearer {token}"
+        )
+
+    def test_registra_con_nombre_y_telefono_sin_correo(self):
+        respuesta = self._post({"nombre": "Luis", "telefono": "3124567890"})
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["direcciones"], [])
+        cliente = User.objects.get(pk=respuesta.data["id"])
+        self.assertEqual(cliente.rol, Rol.CLIENTE)
+        self.assertIsNone(cliente.negocio)
+        self.assertFalse(cliente.has_usable_password())
+        self.assertTrue(cliente.email.endswith("@sin-correo.invalid"))
+
+    def test_registra_con_correo_opcional(self):
+        respuesta = self._post(
+            {"nombre": "Eva", "telefono": "3124567891", "email": "EVA@example.com"}
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["email"], "eva@example.com")
+
+    def test_telefono_debe_tener_10_digitos(self):
+        for telefono in ("312456789", "31245678901", "312-456-789", "abcdefghij"):
+            with self.subTest(telefono=telefono):
+                respuesta = self._post({"nombre": "Luis", "telefono": telefono})
+                self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("telefono", respuesta.data)
+
+    def test_no_repite_telefono_ni_correo(self):
+        self._post({"nombre": "Luis", "telefono": "3124567890"})
+        User.objects.create_user(
+            email="ya@example.com", password=PASSWORD, nombre="Ya",
+            apellido="Existe", telefono="3999999999",
+        )
+
+        repetido = self._post({"nombre": "Otro", "telefono": "3124567890"})
+        correo = self._post(
+            {"nombre": "Otro", "telefono": "3111111111", "email": "ya@example.com"}
+        )
+
+        self.assertEqual(repetido.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("teléfono", repetido.data["detail"])
+        self.assertEqual(correo.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_el_cliente_registrado_recibe_el_pedido_telefonico(self):
+        sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Norte", direccion="Calle 1")
+        SedeUsuario.objects.create(usuario=self.operador, sede=sede)
+        habilitar_sede_para_pedidos(sede)
+        producto = Producto.objects.create(
+            negocio=negocio_prueba(), nombre="Papas",
+            precio_base=Decimal("1000.00"), tiempo_preparacion_min=5,
+        )
+        InventarioSede.objects.create(sede=sede, producto=producto, controla_stock=False)
+        cliente_id = self._post({"nombre": "Luis", "telefono": "3124567890"}).data["id"]
+
+        token = LoginSerializer.get_token(self.operador).access_token
+        respuesta = self.client.post(
+            reverse("pedido_list_create"),
+            {
+                "sede_id": str(sede.pk),
+                "cliente_id": cliente_id,
+                "canal": "telefono",
+                "detalles": [{"producto_id": str(producto.pk), "cantidad": 1}],
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["cliente_id"], cliente_id)
+        self.assertEqual(respuesta.data["cliente_telefono"], "3124567890")
+
+    def test_cocina_y_clientes_no_registran(self):
+        for rol in (Rol.COCINA, Rol.CLIENTE):
+            usuario = User.objects.create_user(
+                negocio=negocio_de_rol(rol), email=f"{rol}.rap@example.com",
+                password=PASSWORD, nombre="X", apellido="Y",
+                telefono="3000000000", rol=rol,
+            )
+            with self.subTest(rol=rol):
+                respuesta = self._post({"nombre": "Luis", "telefono": "3124567890"}, usuario)
+                self.assertEqual(respuesta.status_code, status.HTTP_403_FORBIDDEN)

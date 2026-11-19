@@ -8,7 +8,7 @@ import { desactivarSede, listarSedes, reactivarSede } from "../../api/sedes"
 import { mensajeDeError } from "../../utils/errores"
 import { resumenHorarios } from "../../utils/horarios"
 
-const COLUMNAS = "grid grid-cols-[1fr_1.2fr_1.3fr_0.7fr_290px] items-center gap-4"
+const COLUMNAS = "grid grid-cols-[1fr_1.2fr_1.3fr_0.7fr_390px] items-center gap-4"
 const TITULOS = ["Nombre", "Dirección", "Horario", "Estado", "Acciones"]
 
 export default function Sedes() {
@@ -108,7 +108,7 @@ export default function Sedes() {
         <MensajeAlerta tipo="info">Cargando sedes…</MensajeAlerta>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-borde bg-white p-4">
-          <div className="min-w-[900px]">
+          <div className="min-w-[1000px]">
             <div className={`${COLUMNAS} py-3 text-xs leading-4 text-texto-sec`}>
               {TITULOS.map((titulo) => (
                 <p key={titulo}>{titulo}</p>
@@ -135,6 +135,12 @@ export default function Sedes() {
                       onClick={() => navigate(`/admin/sedes/${sede.id}/editar`)}
                     >
                       Editar
+                    </Boton>
+                    <Boton
+                      tipo="secundario"
+                      onClick={() => navigate(`/admin/sedes/${sede.id}/zonas`)}
+                    >
+                      Zonas
                     </Boton>
                     {sede.activa ? (
                       <Boton

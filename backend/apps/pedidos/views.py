@@ -16,11 +16,18 @@ from apps.usuarios.models import Rol
 from .models import Pedido
 from .serializers import (
     CambioEstadoSerializer,
+    CancelarPedidoSerializer,
     PedidoCreateSerializer,
     PedidoFiltroSerializer,
     PedidoSerializer,
 )
-from .services import cambiar_estado_pedido, crear_pedido, pedidos_visibles_para
+from .services import (
+    cambiar_estado_pedido,
+    cancelar_pedido,
+    cotizar_pedido,
+    crear_pedido,
+    pedidos_visibles_para,
+)
 
 PERMISO_CREAR = EsCliente | EsOperador | EsAdmin
 PERMISO_OPERACION = EsCocina | EsOperador | EsRepartidor | EsAdmin
@@ -64,9 +71,8 @@ class PedidoListCreateView(APIView):
         cliente = datos.pop("cliente", None)
 
         if request.user.rol == Rol.CLIENTE:
-            # Un cliente siempre compra a su nombre y no fija su propio descuento.
+            # Un cliente siempre compra a su nombre.
             cliente = request.user
-            datos.pop("descuento", None)
         else:
             exigir_gestion_sede(request.user, sede)
 
@@ -120,4 +126,85 @@ class PedidoEstadoView(APIView):
                 {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        return Response(PedidoSerializer(pedido).data)
+
+
+class PedidoCotizarView(APIView):
+    """Desglose del pedido antes de confirmarlo (HU-5.2).
+
+    Recibe lo mismo que la creación y responde subtotal, descuento de la
+    promoción, costo de domicilio según la zona y total, más los problemas
+    que impedirían confirmarlo (sede cerrada, fuera de cobertura, mínimo...).
+    """
+
+    permission_classes = [PERMISO_CREAR]
+
+    def post(self, request):
+        serializer = PedidoCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        datos = serializer.validated_data
+        if request.user.rol != Rol.CLIENTE:
+            exigir_gestion_sede(request.user, datos["sede"])
+
+        try:
+            cotizacion = cotizar_pedido(
+                sede=datos["sede"],
+                detalles=datos["detalles"],
+                tipo=datos["tipo"],
+                entrega_lat=datos.get("entrega_lat"),
+                entrega_lng=datos.get("entrega_lng"),
+                codigo_promocion=datos.get("codigo_promocion", ""),
+                promocion_id=datos.get("promocion_id"),
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"detail": str(exc)})
+
+        zona = cotizacion["zona"]
+        promocion = cotizacion["promocion"]
+        return Response(
+            {
+                "subtotal": f"{cotizacion['subtotal']:.2f}",
+                "descuento": f"{cotizacion['descuento']:.2f}",
+                "costo_domicilio": f"{cotizacion['costo_domicilio']:.2f}",
+                "total": f"{cotizacion['total']:.2f}",
+                "tiempo_estimado_min": cotizacion["tiempo_estimado_min"],
+                "zona": zona
+                and {
+                    "id": str(zona.pk),
+                    "nombre": zona.nombre,
+                    "pedido_minimo": f"{zona.pedido_minimo:.2f}",
+                    "tiempo_estimado_min": zona.tiempo_estimado_min,
+                },
+                "promocion": promocion
+                and {
+                    "id": str(promocion.pk),
+                    "nombre": promocion.nombre,
+                    "codigo": promocion.codigo,
+                },
+                "error_promocion": cotizacion["error_promocion"],
+                "problemas": cotizacion["problemas"],
+                "puede_confirmar": not cotizacion["problemas"],
+            }
+        )
+
+
+class PedidoCancelarView(APIView):
+    """El cliente cancela su propio pedido mientras está en Recibido (HU-5.6)."""
+
+    permission_classes = [EsCliente]
+
+    def post(self, request, pk):
+        if not Pedido.objects.filter(pk=pk, cliente=request.user).exists():
+            return Response(
+                {"detail": "Pedido no encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = CancelarPedidoSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            pedido = cancelar_pedido(
+                pk, usuario=request.user, motivo=serializer.validated_data["motivo"]
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(PedidoSerializer(pedido).data)

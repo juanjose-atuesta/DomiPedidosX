@@ -15,6 +15,9 @@ from .views import (
     DireccionListCreateView,
     DireccionDetailView,
     ClienteBusquedaView,
+    ActivarCuentaView,
+    ReenviarActivacionView,
+    DesactivarMiCuentaView,
 )
 
 urlpatterns = [
@@ -23,6 +26,13 @@ urlpatterns = [
     path("registro-negocio/", RegistroNegocioView.as_view(), name="registro_negocio"),
     path("login/", LoginView.as_view(), name="login"),
     path("me/", MeView.as_view(), name="usuario_me"),
+    path("me/desactivar/", DesactivarMiCuentaView.as_view(), name="desactivar_mi_cuenta"),
+    path("activar-cuenta/", ActivarCuentaView.as_view(), name="activar_cuenta"),
+    path(
+        "activar-cuenta/<str:token>/",
+        ActivarCuentaView.as_view(),
+        name="activar_cuenta_token",
+    ),
     path("personal/", RegistroPersonalView.as_view(), name="registro_personal"),
     path(
         "password-reset/",
@@ -38,6 +48,11 @@ urlpatterns = [
     path("usuarios/", UsuarioListAdminView.as_view(), name="listar-usuarios"),
     path("usuarios/<uuid:pk>/desactivar/", DesactivarUsuarioView.as_view(), name="desactivar-usuario"),
     path("usuarios/<uuid:pk>/cambiar-rol/", CambiarRolView.as_view(), name="cambiar-rol"),
+    path(
+        "usuarios/<uuid:pk>/reenviar-activacion/",
+        ReenviarActivacionView.as_view(),
+        name="reenviar-activacion",
+    ),
     path("direcciones/", DireccionListCreateView.as_view(), name="direcciones"),
     path("direcciones/<uuid:pk>/", DireccionDetailView.as_view(), name="direccion_detail"),
     path("clientes/", ClienteBusquedaView.as_view(), name="clientes_busqueda"),
