@@ -2,7 +2,9 @@ import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import ClienteLayout from "../../layouts/ClienteLayout"
 import Boton from "../../components/Boton"
+import CampoPromocion from "../../components/CampoPromocion"
 import CampoSelect from "../../components/CampoSelect"
+import DesgloseCotizacion from "../../components/DesgloseCotizacion"
 import CampoTexto from "../../components/CampoTexto"
 import ListaLineasPedido from "../../components/ListaLineasPedido"
 import MensajeAlerta from "../../components/MensajeAlerta"
@@ -11,6 +13,7 @@ import { listarDirecciones } from "../../api/direcciones"
 import { crearPedido } from "../../api/pedidos"
 import { listarSedes } from "../../api/sedes"
 import { useCarrito } from "../../context/carrito-context"
+import { useCotizacion } from "../../hooks/useCotizacion"
 import { etiquetaSede } from "../../utils/catalogo"
 import {
   METODOS_PAGO,
@@ -20,7 +23,6 @@ import {
   subtotalLineas,
 } from "../../utils/carrito"
 import { mensajeDeError } from "../../utils/errores"
-import { moneda } from "../../utils/formato"
 
 export default function Carrito() {
   const navigate = useNavigate()
@@ -33,6 +35,7 @@ export default function Carrito() {
   const [direccionElegida, setDireccionElegida] = useState("")
   const [metodoPago, setMetodoPago] = useState(METODOS_PAGO[0].valor)
   const [observaciones, setObservaciones] = useState("")
+  const [codigoPromocion, setCodigoPromocion] = useState("")
   const [error, setError] = useState("")
   const [enviando, setEnviando] = useState(false)
 
@@ -70,21 +73,32 @@ export default function Carrito() {
     direcciones.find((d) => d.id === direccionElegida) ?? direccionPorDefecto(direcciones)
   const faltaDireccion = tipo === "domicilio" && !direccion
 
+  // Lo que define el precio: el backend calcula domicilio y descuento con esto.
+  const datosPrecio =
+    lineas.length > 0 && !faltaDireccion
+      ? {
+          sede_id: sedeId,
+          tipo,
+          detalles: detallesDePedido(lineas),
+          codigo_promocion: codigoPromocion,
+          ...(tipo === "domicilio" ? datosDeEntrega(direccion) : {}),
+        }
+      : null
+  const { cotizacion, cargando: cotizando, error: errorCotizacion } = useCotizacion(datosPrecio)
+  const puedeConfirmar = Boolean(cotizacion?.puede_confirmar) && !cotizando
+
   const confirmar = async () => {
-    if (enviando || faltaDireccion || lineas.length === 0) return
+    if (enviando || !datosPrecio || !puedeConfirmar) return
 
     setEnviando(true)
     setError("")
 
     try {
       const pedido = await crearPedido({
-        sede_id: sedeId,
+        ...datosPrecio,
         canal: "web",
-        tipo,
         metodo_pago: metodoPago,
         observaciones: observaciones.trim(),
-        detalles: detallesDePedido(lineas),
-        ...(tipo === "domicilio" ? datosDeEntrega(direccion) : {}),
       })
       vaciar(sedeId)
       navigate("/cliente/pedido-recibido", { replace: true, state: { pedido } })
@@ -169,12 +183,28 @@ export default function Carrito() {
         onChange={(e) => setObservaciones(e.target.value)}
       />
 
-      <div className="flex items-center justify-between border-t border-borde pt-4">
-        <span className="text-base font-semibold text-texto">Subtotal</span>
-        <span className="font-titulo text-2xl font-semibold text-acento">{moneda(subtotal)}</span>
-      </div>
+      <CampoPromocion
+        codigoAplicado={codigoPromocion}
+        onAplicar={setCodigoPromocion}
+        error={cotizacion?.error_promocion}
+        promocion={cotizacion?.promocion}
+        cargando={cotizando}
+      />
 
-      <Boton grande anchoCompleto disabled={enviando || cargando || faltaDireccion} onClick={confirmar}>
+      <DesgloseCotizacion
+        subtotalLocal={subtotal}
+        tipo={tipo}
+        cotizacion={cotizacion}
+        cargando={cotizando}
+        error={errorCotizacion}
+      />
+
+      <Boton
+        grande
+        anchoCompleto
+        disabled={enviando || cargando || faltaDireccion || !puedeConfirmar}
+        onClick={confirmar}
+      >
         {enviando ? "Confirmando…" : "Confirmar pedido"}
       </Boton>
     </ClienteLayout>

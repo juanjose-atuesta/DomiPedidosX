@@ -2,9 +2,12 @@ import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import AdminLayout from "../../layouts/AdminLayout"
 import Boton from "../../components/Boton"
+import CampoPromocion from "../../components/CampoPromocion"
 import CampoSelect from "../../components/CampoSelect"
+import DesgloseCotizacion from "../../components/DesgloseCotizacion"
 import CampoTexto from "../../components/CampoTexto"
 import ListaLineasPedido from "../../components/ListaLineasPedido"
+import MapaDireccion from "../../components/MapaDireccion"
 import MensajeAlerta from "../../components/MensajeAlerta"
 import ModalConfirmacion from "../../components/ModalConfirmacion"
 import SelectorCantidad from "../../components/SelectorCantidad"
@@ -12,7 +15,8 @@ import SelectorEntrega from "../../components/SelectorEntrega"
 import SelectorOpciones from "../../components/SelectorOpciones"
 import { obtenerCatalogoSede } from "../../api/menu"
 import { crearPedido } from "../../api/pedidos"
-import { buscarClientes } from "../../api/usuarios"
+import { buscarClientes, registrarClienteRapido } from "../../api/usuarios"
+import { useCotizacion } from "../../hooks/useCotizacion"
 import { useSedesUsuario } from "../../hooks/useSedesUsuario"
 import { useSeleccionOpciones } from "../../hooks/useSeleccionOpciones"
 import {
@@ -26,6 +30,7 @@ import {
   quitarLinea,
   subtotalLineas,
 } from "../../utils/carrito"
+import { CENTRO_MAPA } from "../../data/cobertura"
 import { normalizarProducto } from "../../utils/catalogo"
 import { mensajeDeError } from "../../utils/errores"
 import { moneda } from "../../utils/formato"
@@ -35,6 +40,89 @@ const CANALES = [
   { valor: "mostrador", etiqueta: "Mostrador" },
 ]
 const ESPERA_BUSQUEDA_MS = 300
+// Correo interno de los clientes registrados sin correo: no se muestra.
+const SIN_CORREO = "@sin-correo.invalid"
+const contacto = (c) =>
+  [c.telefono, c.email?.endsWith(SIN_CORREO) ? "" : c.email].filter(Boolean).join(" · ")
+const TELEFONO_VALIDO = /^\d{10}$/
+
+function RegistroRapido({ telefonoInicial, onRegistrado, onCancelar }) {
+  const [nombre, setNombre] = useState("")
+  const [apellido, setApellido] = useState("")
+  const [telefono, setTelefono] = useState(telefonoInicial)
+  const [email, setEmail] = useState("")
+  const [error, setError] = useState("")
+  const [enviando, setEnviando] = useState(false)
+
+  const telefonoInvalido = telefono !== "" && !TELEFONO_VALIDO.test(telefono)
+
+  const registrar = async (e) => {
+    e.preventDefault()
+    if (enviando || !nombre.trim() || !TELEFONO_VALIDO.test(telefono)) return
+    setEnviando(true)
+    setError("")
+    try {
+      const cliente = await registrarClienteRapido({
+        nombre: nombre.trim(),
+        apellido: apellido.trim(),
+        telefono,
+        email: email.trim(),
+      })
+      onRegistrado(cliente)
+    } catch (err) {
+      setError(mensajeDeError(err, "No se pudo registrar el cliente."))
+      setEnviando(false)
+    }
+  }
+
+  return (
+    <form onSubmit={registrar} className="flex flex-col gap-3 rounded-lg bg-fondo p-3">
+      <p className="text-sm font-semibold text-texto">Registro rápido de cliente</p>
+      <CampoTexto
+        etiqueta="Nombre*"
+        maxLength={100}
+        value={nombre}
+        onChange={(e) => setNombre(e.target.value)}
+        required
+      />
+      <CampoTexto
+        etiqueta="Apellido"
+        maxLength={100}
+        value={apellido}
+        onChange={(e) => setApellido(e.target.value)}
+      />
+      <CampoTexto
+        etiqueta="Teléfono* (10 dígitos)"
+        type="tel"
+        inputMode="numeric"
+        maxLength={10}
+        value={telefono}
+        error={telefonoInvalido ? "Debe tener exactamente 10 dígitos" : ""}
+        onChange={(e) => setTelefono(e.target.value.replace(/\D/g, ""))}
+        required
+      />
+      <CampoTexto
+        etiqueta="Correo (opcional)"
+        type="email"
+        maxLength={150}
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+      <div className="flex justify-end gap-2">
+        <Boton tipo="texto" onClick={onCancelar}>
+          Cancelar
+        </Boton>
+        <Boton
+          type="submit"
+          disabled={enviando || !nombre.trim() || !TELEFONO_VALIDO.test(telefono)}
+        >
+          {enviando ? "Registrando…" : "Registrar y usar"}
+        </Boton>
+      </div>
+    </form>
+  )
+}
 const TARJETA = "flex flex-col gap-4 rounded-xl border border-borde bg-white p-6"
 const TITULO = "font-titulo text-xl font-semibold text-texto"
 
@@ -43,9 +131,10 @@ function SelectorCliente({ cliente, onElegir }) {
   const [resultados, setResultados] = useState([])
   const [buscadoDe, setBuscadoDe] = useState(null)
   const [error, setError] = useState("")
+  const [registrando, setRegistrando] = useState(false)
 
   useEffect(() => {
-    if (cliente) return undefined
+    if (cliente || registrando) return undefined
     let vigente = true
 
     const temporizador = setTimeout(() => {
@@ -67,7 +156,7 @@ function SelectorCliente({ cliente, onElegir }) {
       vigente = false
       clearTimeout(temporizador)
     }
-  }, [busqueda, cliente])
+  }, [busqueda, cliente, registrando])
 
   if (cliente) {
     return (
@@ -76,14 +165,26 @@ function SelectorCliente({ cliente, onElegir }) {
           <p className="font-semibold text-texto">
             {cliente.nombre} {cliente.apellido}
           </p>
-          <p className="text-xs text-texto-sec">
-            {cliente.telefono} · {cliente.email}
-          </p>
+          <p className="text-xs text-texto-sec">{contacto(cliente)}</p>
         </div>
         <Boton tipo="texto" onClick={() => onElegir(null)}>
           Cambiar
         </Boton>
       </div>
+    )
+  }
+
+  if (registrando) {
+    const soloDigitos = busqueda.replace(/\D/g, "")
+    return (
+      <RegistroRapido
+        telefonoInicial={soloDigitos.length === 10 ? soloDigitos : ""}
+        onCancelar={() => setRegistrando(false)}
+        onRegistrado={(nuevo) => {
+          setRegistrando(false)
+          onElegir(nuevo)
+        }}
+      />
     )
   }
 
@@ -101,6 +202,9 @@ function SelectorCliente({ cliente, onElegir }) {
           No encontramos clientes. A un cliente nuevo búscalo con su correo o teléfono exactos.
         </p>
       )}
+      <Boton tipo="texto" pequeno className="self-start" onClick={() => setRegistrando(true)}>
+        + Registrar cliente nuevo
+      </Boton>
       <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto">
         {resultados.map((c) => (
           <li key={c.id}>
@@ -112,13 +216,36 @@ function SelectorCliente({ cliente, onElegir }) {
               <span className="font-semibold">
                 {c.nombre} {c.apellido}
               </span>
-              <span className="block text-xs text-texto-sec">
-                {c.telefono} · {c.email}
-              </span>
+              <span className="block text-xs text-texto-sec">{contacto(c)}</span>
             </button>
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+// Dirección tomada por teléfono: se marca en el mapa solo para este pedido.
+function DireccionManual({ texto, posicion, onCambiarTexto, onCambiarPosicion, onVolver }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg bg-fondo p-3">
+      <CampoTexto
+        etiqueta="Dirección de entrega"
+        placeholder="Calle 5 # 38 - 20, apto 301"
+        value={texto}
+        onChange={(e) => onCambiarTexto(e.target.value)}
+      />
+      <p className="text-xs text-texto-sec">
+        {posicion
+          ? `Punto marcado: ${posicion[0].toFixed(5)}, ${posicion[1].toFixed(5)}`
+          : "Toca el mapa para marcar el punto de entrega"}
+      </p>
+      <MapaDireccion posicion={posicion ?? CENTRO_MAPA} onSeleccionar={onCambiarPosicion} />
+      {onVolver && (
+        <Boton tipo="texto" pequeno className="self-start" onClick={onVolver}>
+          Usar una dirección guardada
+        </Boton>
+      )}
     </div>
   )
 }
@@ -165,8 +292,12 @@ export default function NuevoPedido() {
   const [canal, setCanal] = useState(CANALES[0].valor)
   const [tipo, setTipo] = useState("recoger")
   const [direccionElegida, setDireccionElegida] = useState("")
+  const [usarManual, setUsarManual] = useState(false)
+  const [manualTexto, setManualTexto] = useState("")
+  const [manualPosicion, setManualPosicion] = useState(null)
   const [metodoPago, setMetodoPago] = useState(METODOS_PAGO[0].valor)
   const [observaciones, setObservaciones] = useState("")
+  const [codigoPromocion, setCodigoPromocion] = useState("")
   const [error, setError] = useState("")
   const [enviando, setEnviando] = useState(false)
 
@@ -195,10 +326,38 @@ export default function NuevoPedido() {
   }, [sedeId])
 
   const direcciones = cliente?.direcciones ?? []
-  const direccion =
-    direcciones.find((d) => d.id === direccionElegida) ?? direccionPorDefecto(direcciones)
+  const manual = usarManual || (cliente && direcciones.length === 0)
+  const direccionManual =
+    manualTexto.trim() && manualPosicion
+      ? {
+          direccion_texto: manualTexto.trim(),
+          detalles: "",
+          latitud: manualPosicion[0].toFixed(6),
+          longitud: manualPosicion[1].toFixed(6),
+        }
+      : null
+  const direccion = manual
+    ? direccionManual
+    : (direcciones.find((d) => d.id === direccionElegida) ?? direccionPorDefecto(direcciones))
   const faltaDireccion = tipo === "domicilio" && !direccion
-  const listo = Boolean(cliente) && lineas.length > 0 && !faltaDireccion && !enviando
+
+  const datosPrecio =
+    lineas.length > 0 && !faltaDireccion
+      ? {
+          sede_id: sedeId,
+          tipo,
+          detalles: detallesDePedido(lineas),
+          codigo_promocion: codigoPromocion,
+          ...(tipo === "domicilio" ? datosDeEntrega(direccion) : {}),
+        }
+      : null
+  const { cotizacion, cargando: cotizando, error: errorCotizacion } = useCotizacion(datosPrecio)
+  const listo =
+    Boolean(cliente) &&
+    Boolean(datosPrecio) &&
+    Boolean(cotizacion?.puede_confirmar) &&
+    !cotizando &&
+    !enviando
 
   const texto = filtro.trim().toLowerCase()
   const visibles = catalogo.filter((p) => p.nombre.toLowerCase().includes(texto))
@@ -217,14 +376,11 @@ export default function NuevoPedido() {
 
     try {
       const pedido = await crearPedido({
-        sede_id: sedeId,
+        ...datosPrecio,
         cliente_id: cliente.id,
         canal,
-        tipo,
         metodo_pago: metodoPago,
         observaciones: observaciones.trim(),
-        detalles: detallesDePedido(lineas),
-        ...(tipo === "domicilio" ? datosDeEntrega(direccion) : {}),
       })
       navigate("/operador/pedidos", {
         state: { mensaje: `Pedido #${pedido.id} registrado correctamente.` },
@@ -260,6 +416,7 @@ export default function NuevoPedido() {
               onElegir={(elegido) => {
                 setCliente(elegido)
                 setDireccionElegida("")
+                setUsarManual(false)
               }}
             />
             <CampoSelect
@@ -328,17 +485,28 @@ export default function NuevoPedido() {
             <SelectorEntrega
               tipo={tipo}
               onCambiarTipo={setTipo}
-              direcciones={direcciones}
+              direcciones={manual ? [] : direcciones}
               direccionId={direccion?.id ?? ""}
               onCambiarDireccion={setDireccionElegida}
               sinDirecciones={
-                <MensajeAlerta tipo="aviso">
-                  {cliente
-                    ? "Este cliente no tiene direcciones guardadas."
-                    : "Elige un cliente para ver sus direcciones."}
-                </MensajeAlerta>
+                cliente ? (
+                  <DireccionManual
+                    texto={manualTexto}
+                    posicion={manualPosicion}
+                    onCambiarTexto={setManualTexto}
+                    onCambiarPosicion={setManualPosicion}
+                    onVolver={direcciones.length > 0 ? () => setUsarManual(false) : null}
+                  />
+                ) : (
+                  <MensajeAlerta tipo="aviso">Elige un cliente para ver sus direcciones.</MensajeAlerta>
+                )
               }
             />
+            {tipo === "domicilio" && cliente && !manual && (
+              <Boton tipo="texto" pequeno className="self-start" onClick={() => setUsarManual(true)}>
+                Usar otra dirección
+              </Boton>
+            )}
             <CampoSelect
               etiqueta="Método de pago"
               opciones={METODOS_PAGO}
@@ -352,12 +520,20 @@ export default function NuevoPedido() {
               onChange={(e) => setObservaciones(e.target.value)}
             />
 
-            <div className="flex items-center justify-between border-t border-borde pt-4">
-              <span className="font-semibold text-texto">Subtotal</span>
-              <span className="font-titulo text-2xl font-semibold text-acento">
-                {moneda(subtotalLineas(lineas))}
-              </span>
-            </div>
+            <CampoPromocion
+              codigoAplicado={codigoPromocion}
+              onAplicar={setCodigoPromocion}
+              error={cotizacion?.error_promocion}
+              promocion={cotizacion?.promocion}
+              cargando={cotizando}
+            />
+            <DesgloseCotizacion
+              subtotalLocal={subtotalLineas(lineas)}
+              tipo={tipo}
+              cotizacion={cotizacion}
+              cargando={cotizando}
+              error={errorCotizacion}
+            />
             <Boton anchoCompleto disabled={!listo} onClick={confirmar}>
               {enviando ? "Registrando…" : "Registrar pedido"}
             </Boton>

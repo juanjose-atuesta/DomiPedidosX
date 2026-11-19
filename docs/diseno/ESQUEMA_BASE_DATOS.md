@@ -1,6 +1,6 @@
 # DomiPedidosX: esquema de la base de datos
 
-Resume el modelo multi-negocio y las relaciones con `Negocio`. La base tiene **24 tablas propias**. Se usa SQLite en local y PostgreSQL en despliegue.
+Resume el modelo multi-negocio y las relaciones con `Negocio`. La base tiene **25 tablas propias**. Se usa SQLite en local y PostgreSQL en despliegue.
 
 | Archivo | Contenido |
 |---|---|
@@ -128,7 +128,7 @@ flowchart TD
     PE --> H[pedidos_historialestado]
 ```
 
-El diagrama completo, con las 24 tablas, está en `domipedidosx_erd.mmd`.
+El diagrama completo, con las 25 tablas, está en `domipedidosx_erd.mmd`.
 
 ## 4. Migración de datos existentes
 
@@ -140,3 +140,42 @@ El cambio se aplicó en etapas, para no perder datos anteriores.
 | 2. Agregar la columna | `sedes/0003`, `menu/0002`, `promociones/0003`, `usuarios/0002` | Agrega `negocio_id` como opcional |
 | 3. Asignar datos | `negocios/0002_asignar_datos_existentes` | Mueve lo existente a un "Negocio principal", solo si hay datos. Los clientes quedan sin negocio |
 | 4. Hacerla obligatoria | `sedes/0004`, `menu/0003`, `promociones/0004` | Exige `negocio_id`, excepto en usuarios |
+
+## 5. Cambios de los Sprints 1 a 3
+
+| Migración | Cambio |
+|---|---|
+| `usuarios/0003_bloqueo_login_y_activacion` | Columnas `intentos_fallidos` y `bloqueado_hasta` en `usuarios_user`. Tabla nueva `usuarios_tokenactivacion` |
+
+### `usuarios_user`: bloqueo por intentos (HU-1.2)
+
+| Columna | Tipo | Reglas | Descripción |
+|---|---|---|---|
+| `intentos_fallidos` | smallint | Por defecto `0` | Intentos fallidos consecutivos. Vuelve a 0 al iniciar sesión, activar la cuenta o recuperar la contraseña |
+| `bloqueado_hasta` | timestamp | Nulable | Fin del bloqueo de 15 minutos que se aplica al 5.º fallo |
+
+### `usuarios_tokenactivacion` (HU-1.4)
+
+| Columna | Tipo | Reglas | Descripción |
+|---|---|---|---|
+| `id` | bigint | Clave primaria | Identificador |
+| `usuario_id` | UUID | FK a `usuarios_user`, `CASCADE` | Empleado que activa su cuenta |
+| `token_hash` | varchar(64) | Único | SHA-256 del token; el token en claro solo viaja en el correo |
+| `creado_en` | timestamp | Automático | Fecha de creación |
+| `expira_en` | timestamp | Obligatorio | `creado_en` + 24 horas |
+| `usado_en` | timestamp | Nulable | Fecha de uso; un token usado o vencido no sirve |
+
+### Columnas que ahora se usan
+
+Estas columnas ya existían, pero hasta este cierre no se llenaban:
+
+| Tabla | Columna | Uso actual |
+|---|---|---|
+| `cobertura_zonacobertura` | todas | CRUD de zonas por radio o polígono; se validan al pedir |
+| `pedidos_pedido` | `zona_id`, `costo_domicilio` | Zona que cubre la dirección y su tarifa, calculadas por el servidor |
+| `pedidos_pedido` | `promocion_id`, `descuento` | Promoción aplicada y descuento calculado por el servidor |
+| `pedidos_pedido` | `tiempo_estimado_entrega` | Hora estimada: minutos de la zona o mayor tiempo de preparación |
+| `pedidos_pedido` | `motivo_cancelacion` | Motivo de la cancelación del cliente |
+| `sedes_horarioatencion` | todas | Se valida que la sede esté abierta al pedir |
+
+El cupo diario de una promoción no tiene columna: se cuenta con los pedidos del día que la usan y no están cancelados (índice `idx_pedido_promocion`).

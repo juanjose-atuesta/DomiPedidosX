@@ -1,7 +1,7 @@
 ================================================================================
 DOMIPEDIDOSX - DOCUMENTACION DEL MODELO DE DATOS
 ================================================================================
-Base de datos: 24 tablas propias (SQLite en local, PostgreSQL/Supabase en el
+Base de datos: 25 tablas propias (SQLite en local, PostgreSQL/Supabase en el
 entorno desplegado). Los modelos estan en backend/apps/<app>/models.py.
 
 Este documento explica, por cada tabla:
@@ -172,11 +172,16 @@ Atributos
   is_staff          Si puede entrar al panel /admin de Django (no es lo mismo
                     que el rol admin del negocio).
   is_superuser      Permisos totales de Django (lo usa createsuperuser).
+  intentos_fallidos Intentos de login fallidos consecutivos (HU-1.2). Vuelve a
+                    0 al entrar, al activar la cuenta o al recuperar la clave.
+  bloqueado_hasta   Fin del bloqueo temporal (15 min tras 5 fallos). NULL =
+                    no bloqueado. Mientras dure, ni la clave correcta entra.
 
 Relaciones
   N-1  negocios_negocio            El personal pertenece a un negocio (opcional).
   1-N  usuarios_direccion          Un cliente tiene varias direcciones guardadas.
   1-1  usuarios_perfilrepartidor   Solo los repartidores tienen perfil.
+  1-N  usuarios_tokenactivacion    Enlaces de activacion del personal.
   N-M  sedes_sede (via sedes_sedeusuario)
                                    El personal operativo se asigna a sedes.
   1-N  pedidos_pedido              Aparece TRES veces en un pedido, con
@@ -231,7 +236,26 @@ Atributos
 
 Relaciones
   1-1  usuarios_user      Cada repartidor tiene como maximo un perfil.
-Pendiente del codigo: crear el perfil al crear un usuario con rol repartidor.
+El codigo crea el perfil al crear un usuario con rol repartidor.
+
+--------------------------------------------------------------------------------
+usuarios_tokenactivacion            (PK: id autoincremental)
+--------------------------------------------------------------------------------
+Proposito: enlace de un solo uso para que el personal nuevo defina su propia
+contrasena (HU-1.4). El admin ya no escribe la contrasena del empleado.
+
+Atributos
+  usuario         FK a usuarios_user. CASCADE.
+  token_hash      SHA-256 del token. Unico. El token en claro solo viaja en el
+                  correo, asi que leer la base no permite activar cuentas.
+  creado_en       Cuando se genero.
+  expira_en       creado_en + 24 horas (ACTIVACION_CUENTA_HORAS).
+  usado_en        Cuando se uso. NULL = aun no se usa. Un token usado o vencido
+                  no sirve.
+
+Relaciones
+  N-1  usuarios_user      Un empleado puede tener varios tokens en el tiempo;
+                          al reenviar el enlace se borran los no usados.
 
 
 ================================================================================

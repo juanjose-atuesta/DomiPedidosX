@@ -2,7 +2,7 @@
 
 Describe la arquitectura, las rutas y los flujos de la aplicación web. El código fuente está en `frontend/`.
 
-- **Stack:** React 19, Vite, Tailwind CSS 4, React Router 7, Axios; Leaflet para el mapa de direcciones.
+- **Stack:** React 19, Vite, Tailwind CSS 4, React Router 7, Axios; Leaflet para los mapas de direcciones y de zonas de cobertura.
 - **Configuración:** variable `VITE_API_URL` (por defecto `http://localhost:8000`). El sufijo `/api` se agrega si falta.
 
 ```bash
@@ -23,8 +23,8 @@ frontend/src/
 ├── assets/      Imágenes y fondos
 ├── components/  Componentes reutilizables (Boton, CampoTexto, MensajeAlerta, ...)
 ├── context/     Estado global: sesión y carrito
-├── data/        Datos locales de cobertura y sedes
-├── hooks/       usePedidos, useSedesUsuario, useSeleccionOpciones
+├── data/        Centro inicial de los mapas (CENTRO_MAPA) y sedes de ejemplo
+├── hooks/       usePedidos, useSedesUsuario, useSeleccionOpciones, useCotizacion
 ├── layouts/     AuthLayout, ClienteLayout, AdminLayout
 ├── pages/       Pantallas por actor: auth, admin, operador, cocina, repartidor, cliente
 ├── routes/      RutaProtegida
@@ -45,7 +45,7 @@ flowchart LR
 ```
 
 - Las páginas no llaman a Axios directamente: usan las funciones de `api/`.
-- Reglas como las transiciones de estado vienen del backend (`estados_siguientes`) y no se duplican aquí.
+- Reglas como las transiciones de estado vienen del backend (`estados_siguientes`, `puede_cancelar`) y no se duplican aquí. Lo mismo con el dinero: domicilio, descuento y total los calcula `POST /pedidos/cotizar/`.
 - Los errores de la API se convierten en texto con `mensajeDeError` (`utils/errores.js`) y se muestran con `MensajeAlerta`.
 - Los efectos que cargan datos descartan respuestas tardías con una bandera `vigente`.
 
@@ -147,12 +147,13 @@ Definido en `INICIO_POR_ROL` (`utils/roles.js`).
 | Ruta | Pantalla | Notas |
 |---|---|---|
 | `/` | | Redirige a `/login` |
-| `/login` | `Login.jsx` | **Inicio de sesión principal** |
+| `/login` | `Login.jsx` | **Inicio de sesión principal.** Muestra el `detail` del backend: "Credenciales incorrectas", "Cuenta desactivada" o el aviso de bloqueo temporal tras 5 intentos fallidos |
 | `/iniciar-sesion` | | Redirige a `/login` |
 | `/bienvenida` | `Bienvenida.jsx` | Se llega con "Regresar" desde el login móvil |
 | `/registro` | `Registro.jsx` | Registro de cliente |
 | `/registro-administrador` | `RegistroAdministrador.jsx` | Registro de negocio |
-| `/recuperar-contrasena` | `RecuperarContrasena.jsx` | **Simulada:** aún no llama a la API |
+| `/recuperar-contrasena` | `RecuperarContrasena.jsx` | Sin parámetros pide el correo (`POST /usuarios/password-reset/`). Con `?uid=&token=` (el enlace del correo) pide la nueva contraseña |
+| `/activar-cuenta/:token` | `ActivarCuenta.jsx` | El personal nuevo define su contraseña con el enlace del correo |
 | `/registro-restaurante` | `RegistroRestaurante.jsx` | **Maqueta:** no guarda datos y nada enlaza a ella |
 | `/acceso-denegado` | `AccesoDenegado.jsx` | Ofrece volver al inicio o cerrar sesión |
 
@@ -162,7 +163,7 @@ Los roles de cada sección están en `ROLES_POR_SECCION` (`utils/roles.js`), que
 
 | Sección | Roles | Rutas |
 |---|---|---|
-| `/admin` | admin | `/admin/usuarios`, `/admin/usuarios/nueva`, `/admin/sedes`, `/admin/sedes/nueva`, `/admin/sedes/:id/editar` |
+| `/admin` | admin | `/admin/usuarios`, `/admin/usuarios/nueva`, `/admin/sedes`, `/admin/sedes/nueva`, `/admin/sedes/:id/editar`, `/admin/sedes/:id/zonas` |
 | `/operador` | operador, admin | `/operador/pedidos`, `/operador/pedidos/nuevo`, `/operador/categorias`, `/operador/productos`, `/operador/productos/nuevo`, `/operador/productos/:id/editar`, `/operador/promociones`, `/operador/promociones/nueva`, `/operador/promociones/:id/editar`, `/operador/inventario` |
 | `/cocina` | cocina, operador, admin | `/cocina` |
 | `/repartidor` | repartidor | `/repartidor` |
@@ -223,10 +224,11 @@ sequenceDiagram
 
 Después el administrador configura su negocio en este orden:
 
-1. **Crea una sede** con sus horarios en `/admin/sedes`.
-2. **Crea el menú** en `/operador/categorias` y `/operador/productos`.
-3. **Activa los productos en la sede** en `/operador/inventario`. Sin este paso no aparecen en el catálogo.
-4. **Crea su personal** en `/admin/usuarios/nueva`, asignándolo a sus sedes.
+1. **Crea una sede** con sus horarios en `/admin/sedes`. Fuera de su horario la sede no recibe pedidos.
+2. **Define sus zonas de cobertura** en `/admin/sedes/:id/zonas`. Sin zonas, la sede no recibe domicilios.
+3. **Crea el menú** en `/operador/categorias` y `/operador/productos`.
+4. **Activa los productos en la sede** en `/operador/inventario`. Sin este paso no aparecen en el catálogo.
+5. **Crea su personal** en `/admin/usuarios/nueva`, asignándolo a sus sedes. Cada persona recibe un correo para activar su cuenta.
 
 Si el registro funciona pero falla el inicio de sesión automático, el usuario va a `/login` con un aviso. No se reintenta el registro, porque fallaría por correo repetido.
 
@@ -243,7 +245,12 @@ sequenceDiagram
     F->>F: Agrega al carrito de esa sede
     C->>F: Abre /cliente/carrito
     F->>A: GET /sedes/ y GET /usuarios/direcciones/
-    C->>F: Elige entrega, dirección y pago, y confirma
+    C->>F: Elige entrega, dirección, pago y código de promoción
+    loop Cada cambio (espera 350 ms)
+        F->>A: POST /pedidos/cotizar/
+        A-->>F: Subtotal, descuento, domicilio, total y problemas
+    end
+    C->>F: Confirma (solo si puede_confirmar)
     F->>A: POST /pedidos/
     A-->>F: 201 con el pedido, stock ya descontado
     F->>F: Vacía el carrito de esa sede
@@ -256,7 +263,18 @@ sequenceDiagram
 
 - **Catálogo:** los productos agotados se muestran sin opción de compra.
 - **Domicilio:** exige una dirección guardada. El botón "Agregar dirección" lleva al formulario y vuelve al carrito.
-- **`/cliente/pedidos`:** muestra negocio, sede, productos, total y estado. El estado se actualiza consultando cada 10 segundos, sin WebSockets.
+- **Desglose:** `DesgloseCotizacion` muestra Subtotal, Descuento (con el nombre de la promoción), Domicilio (con el nombre de la zona) y Total. Los avisos del backend (sede cerrada, fuera de cobertura, pedido mínimo) aparecen debajo y deshabilitan "Confirmar pedido".
+- **Código de promoción:** `CampoPromocion` aplica el código al pulsar "Aplicar"; si no es válido muestra el motivo bajo el campo. Borrar el texto y pulsar "Quitar" lo retira.
+- **`/cliente/pedidos`:** muestra negocio, sede, productos, desglose del total y estado. El estado se actualiza consultando cada 10 segundos, sin WebSockets.
+- **Cancelar:** con `puede_cancelar` (estado Recibido) aparece "Cancelar pedido", que pide un motivo opcional y llama a `POST /pedidos/{id}/cancelar/`. Un pedido cancelado muestra su motivo.
+
+### 4.2.1 Direcciones y cobertura
+
+Al marcar el punto en `/cliente/direcciones/nueva`, la pantalla consulta `GET /cobertura/verificar/`. Si ninguna sede llega a ese punto muestra "Tu dirección está fuera de la zona de cobertura" y no lo acepta. La validación definitiva la hace el backend al pedir, contra las zonas de la sede elegida.
+
+### 4.2.2 Cuenta del cliente
+
+En `/cliente/perfil`, "Desactivar cuenta" pide la contraseña, llama a `PATCH /usuarios/me/desactivar/` y cierra la sesión.
 
 ### 4.3 Gestión del inventario por la sede
 
@@ -291,6 +309,15 @@ flowchart LR
 
 - **`/operador/pedidos`:** tabla con filtros de sede, estado y fecha, y botón para avanzar cada pedido.
 - **`/operador/pedidos/nuevo`:** registra pedidos por teléfono o mostrador. Busca al cliente por nombre si ya compró en el negocio, o por correo o teléfono exactos si es nuevo.
+  - **Registro rápido:** "+ Registrar cliente nuevo" pide nombre, teléfono de 10 dígitos y, opcionalmente, apellido y correo (`POST /usuarios/clientes/`). El cliente queda elegido para el pedido.
+  - **Dirección para este pedido:** si el cliente no tiene direcciones, o con "Usar otra dirección", el operador escribe la dirección y marca el punto en el mapa. Se guarda solo como copia en el pedido.
+  - Usa el mismo desglose y código de promoción que el carrito del cliente.
+
+### 4.5.1 Personal y zonas (admin)
+
+- **`/admin/usuarios/nueva`:** ya no pide contraseña. El backend envía al correo del empleado un enlace de activación de 24 horas.
+- **`/admin/usuarios`:** el personal sin activar muestra "Activación pendiente · Reenviar enlace".
+- **`/admin/sedes/:id/zonas`** (botón "Zonas" en la lista de sedes): mapa con las zonas activas. Una zona nueva se define tocando el mapa: el centro, si es por radio, o los vértices, si es un polígono (mínimo 3, con "Deshacer punto"). Cada zona lleva tarifa de domicilio, pedido mínimo y tiempo estimado, y se puede editar, desactivar o reactivar.
 
 ### 4.6 Entregas del repartidor
 
@@ -306,9 +333,7 @@ Cada tarjeta muestra dirección, teléfono con enlace para llamar, productos, ob
 
 | Tema | Estado actual |
 |---|---|
-| Recuperar contraseña | Simulada: muestra éxito sin cambiar nada, aunque el backend ya tiene `password-reset/` |
 | `/registro-restaurante` | Maqueta sin uso; conviene retirarla o redirigirla |
 | Tiempo real | Consulta periódica, no notificaciones instantáneas |
-| Promociones y domicilio | No se aplican descuentos al comprar, y el costo de domicilio queda en $0 |
 | Bienvenida en escritorio | Solo accesible escribiendo la URL. "Continuar con Teléfono" lleva al mismo registro con correo |
 | Doble toma de un pedido | El segundo repartidor ve un error, y la tarjeta sigue visible hasta la siguiente consulta |

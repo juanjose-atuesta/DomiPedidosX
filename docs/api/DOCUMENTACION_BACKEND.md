@@ -5,6 +5,7 @@ Describe la arquitectura y los endpoints de la API REST. El código fuente está
 - **Stack:** Django, Django REST Framework (DRF), SimpleJWT, SQLite en local y PostgreSQL en despliegue (`DATABASE_URL`).
 - **URL base:** `/api`. En local: `http://localhost:8000/api`.
 - **Autenticación:** encabezado `Authorization: Bearer <access>`. El acceso por defecto exige sesión; cada vista pública lo declara con `AllowAny`.
+- **Variables de entorno** (`backend/.env`): `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `DATABASE_URL`, `FRONTEND_URL` (base de los enlaces que llegan por correo; por defecto `http://localhost:5173`) y `DEFAULT_FROM_EMAIL`.
 
 ## 1. Arquitectura
 
@@ -26,14 +27,14 @@ Los permisos reutilizables están en `apps/core/permissions.py`.
 | App | Dominio | ¿Tiene endpoints? |
 |---|---|---|
 | `negocios` | Modelo `Negocio` | No; se crea con el registro de negocio y se administra en el admin de Django |
-| `usuarios` | Cuentas, JWT, personal, direcciones | Sí |
+| `usuarios` | Cuentas, JWT, bloqueo de login, activación de personal, direcciones | Sí |
 | `sedes` | Sedes y horarios | Sí |
 | `menu` | Categorías, productos, opciones, combos | Sí |
 | `inventario` | Disponibilidad y existencias por sede | Sí |
 | `promociones` | Promociones con vigencia y cupo | Sí |
 | `pedidos` | Pedidos, detalle e historial de estados | Sí |
 | `notificaciones` | Alertas de stock bajo | No; las genera el descuento de inventario |
-| `cobertura` | Zonas y capacidad por franja | No; solo modelos |
+| `cobertura` | Zonas de cobertura (radio o polígono) y capacidad por franja | Sí, las zonas. La capacidad aún no |
 | `repartos`, `reportes` | Reservadas | No |
 
 ### 1.2 Modelo multi-negocio (multi-tenant)
@@ -147,14 +148,19 @@ La columna **Acceso** usa: *Público* (sin sesión), *Sesión* (cualquier usuari
 | POST | `/usuarios/registro/` | Público | Registra un cliente. No devuelve tokens |
 | POST | `/usuarios/registro-negocio/` | Público | Registra un negocio y su administrador. No devuelve tokens |
 | GET, PATCH | `/usuarios/me/` | Sesión | Consulta el perfil propio o edita `nombre`, `apellido` y `telefono` |
-| POST | `/usuarios/personal/` | Admin | Crea personal del negocio y lo asigna a sus sedes |
-| GET | `/usuarios/usuarios/` | Admin | Lista el personal activo del negocio |
+| PATCH | `/usuarios/me/desactivar/` | Cliente | El cliente desactiva su propia cuenta. Cuerpo: `{"password": "..."}` |
+| POST | `/usuarios/personal/` | Admin | Crea personal del negocio, lo asigna a sus sedes y le envía el enlace de activación |
+| GET | `/usuarios/activar-cuenta/{token}/` | Público | Valida el enlace de activación. Devuelve `nombre`, `email`, `rol` y `expira_en` |
+| POST | `/usuarios/activar-cuenta/` | Público | Define la contraseña del personal. Cuerpo: `token`, `password`, `password_confirmacion` |
+| GET | `/usuarios/usuarios/` | Admin | Lista el personal activo del negocio, con `activacion_pendiente` |
 | PATCH | `/usuarios/usuarios/{id}/desactivar/` | Admin | Desactiva a un miembro del personal (`is_active=False`) |
 | PATCH | `/usuarios/usuarios/{id}/cambiar-rol/` | Admin | Cambia el rol. Cuerpo: `{"rol": "..."}` |
+| POST | `/usuarios/usuarios/{id}/reenviar-activacion/` | Admin | Envía un enlace nuevo e invalida el anterior |
 | GET | `/usuarios/clientes/?q=` | Operador, Admin | Busca clientes para registrar pedidos a su nombre |
+| POST | `/usuarios/clientes/` | Operador, Admin | Registro rápido de un cliente: `nombre`, `telefono` (10 dígitos), `apellido` y `email` opcionales |
 | GET, POST | `/usuarios/direcciones/` | Sesión | Lista o crea direcciones propias, con un máximo de 5 |
 | PATCH, DELETE | `/usuarios/direcciones/{id}/` | Sesión | Edita o desactiva una dirección propia |
-| POST | `/usuarios/password-reset/` | Público | Envía el token de recuperación por correo. La respuesta no revela si el correo existe |
+| POST | `/usuarios/password-reset/` | Público | Envía por correo un enlace de recuperación (30 minutos). La respuesta no revela si el correo existe |
 | POST | `/usuarios/password-reset/confirmar/` | Público | Cambia la contraseña. Cuerpo: `uidb64`, `token`, `new_password` |
 
 **Inicio de sesión**
@@ -181,6 +187,22 @@ La columna **Acceso** usa: *Público* (sin sesión), *Sesión* (cualquier usuari
 ```
 
 Vigencia de los tokens: `access` 60 minutos y `refresh` 7 días.
+
+**Bloqueo por intentos fallidos (HU-1.2)**
+
+| Situación | Respuesta (401) |
+|---|---|
+| Correo inexistente o contraseña incorrecta | `"Credenciales incorrectas"` |
+| 5.º intento fallido consecutivo | `"Tu cuenta está bloqueada temporalmente por demasiados intentos fallidos. Intenta de nuevo en 15 minutos."` |
+| Durante el bloqueo, aunque la contraseña sea correcta | El mismo mensaje con los minutos restantes |
+| Cuenta desactivada y contraseña correcta | `"Cuenta desactivada"` |
+
+- El contador vive en `User.intentos_fallidos` y el fin del bloqueo en `User.bloqueado_hasta`.
+- Un inicio de sesión exitoso, la activación de la cuenta o la recuperación de contraseña reinician ambos.
+- Un correo inexistente no acumula intentos, para no revelar qué correos existen.
+- Parámetros en `settings.py`: `LOGIN_MAX_INTENTOS = 5` y `LOGIN_BLOQUEO_MINUTOS = 15`.
+
+**Recuperación de contraseña.** El correo incluye el enlace `{FRONTEND_URL}/recuperar-contrasena?uid=...&token=...`, válido 30 minutos (`PASSWORD_RESET_TIMEOUT`).
 
 **Registro de negocio**
 
@@ -216,13 +238,12 @@ Vigencia de los tokens: `access` 60 minutos y `refresh` 7 días.
   "email": "luis@negocio.com",
   "telefono": "3005556677",
   "rol": "repartidor",
-  "sedes_ids": ["uuid-de-sede"],
-  "password": "ClaveSegura#2024",
-  "password_confirmacion": "ClaveSegura#2024"
+  "sedes_ids": ["uuid-de-sede"]
 }
 ```
 
 - Roles permitidos: `operador`, `cocina`, `repartidor` y `admin`.
+- **El admin no define la contraseña (HU-1.4).** La cuenta nace con una contraseña inutilizable y se envía al correo del empleado el enlace `{FRONTEND_URL}/activar-cuenta/{token}`. El token es de un solo uso, vence en 24 horas (`ACTIVACION_CUENTA_HORAS`) y en la base solo se guarda su hash (`TokenActivacion`). Si se pide uno nuevo, el anterior deja de servir.
 - Operador, cocina y repartidor requieren al menos una sede activa de su negocio. El admin puede no tener sedes asignadas.
 - Un usuario con rol repartidor recibe automáticamente un `PerfilRepartidor`.
 
@@ -231,9 +252,11 @@ Vigencia de los tokens: `access` 60 minutos y `refresh` 7 días.
 - El admin solo gestiona usuarios de su negocio.
 - Un admin no puede cambiar su propio rol ni desactivarse (400): su negocio podría quedar sin responsable.
 - Al cambiar a una persona al rol `cliente`, pierde su negocio y sus sedes.
-- Un negocio no gestiona cuentas de clientes. Un cliente solo se desactiva desde el admin de Django.
+- Un negocio no gestiona cuentas de clientes. **El cliente desactiva su propia cuenta (HU-1.10)** con `PATCH /usuarios/me/desactivar/`, confirmando su contraseña. Sus pedidos, incluidos los que están en curso, y su historial se conservan; desde ese momento sus tokens dejan de servir y el login responde "Cuenta desactivada".
 
 **Búsqueda de clientes.** Por nombre solo aparecen quienes ya compraron en ese negocio. A un cliente nuevo se le encuentra con su correo o teléfono exactos. Así un negocio no puede recorrer la base de clientes de la plataforma. Devuelve como máximo 20 resultados.
+
+**Registro rápido de cliente (HU-5.9).** El operador crea la cuenta con nombre y teléfono para asociarle un pedido telefónico o de mostrador. El teléfono debe tener exactamente 10 dígitos y no puede repetirse entre clientes. Sin correo se guarda uno interno no entregable (`cliente-<telefono>@sin-correo.invalid`), porque el modelo exige un email único. La cuenta no tiene contraseña; si el cliente dio un correo real puede activarla con "Recuperar contraseña". Responde con el mismo formato que la búsqueda.
 
 ### 3.2 Negocios y sedes
 
@@ -264,6 +287,44 @@ No hay endpoints de `Negocio`: se crea con el registro público y se administra 
 
 - `dia_semana` va de 1 (lunes) a 7 (domingo), y la hora de cierre debe ser posterior a la de apertura.
 - La respuesta incluye `negocio_id` y `negocio_nombre`, que el cliente usa para distinguir sedes de restaurantes distintos.
+- **Los horarios se validan al pedir:** una sede sin un tramo abierto en este momento no recibe pedidos.
+
+### 3.2.1 Zonas de cobertura
+
+Modelo `ZonaCobertura` (app `cobertura`). Cada sede tiene una o varias zonas, definidas por radio o por polígono.
+
+| Método | Ruta | Acceso | Descripción |
+|---|---|---|---|
+| GET | `/cobertura/sedes/{sede_id}/zonas/` | Admin, Operador de la sede | Zonas de la sede, activas e inactivas |
+| POST | `/cobertura/sedes/{sede_id}/zonas/` | Admin | Crea una zona |
+| GET, PUT, PATCH | `/cobertura/zonas/{id}/` | Admin | Consulta o edita una zona. `activa: true` la reactiva |
+| DELETE | `/cobertura/zonas/{id}/` | Admin | Desactiva la zona (borrado lógico) |
+| GET | `/cobertura/verificar/?lat=&lng=[&sede=]` | Público | `{ "cubierta": bool, "zonas": [...] }`: qué sedes llegan a ese punto |
+
+```jsonc
+// POST /api/cobertura/sedes/{sede_id}/zonas/  (por radio)
+{
+  "nombre": "Centro 3 km",
+  "tipo": "radio",
+  "centro_lat": "3.451600",
+  "centro_lng": "-76.532000",
+  "radio_km": "3",
+  "tarifa_domicilio": "4000",
+  "pedido_minimo": "20000",
+  "tiempo_estimado_min": 35
+}
+
+// Por polígono: lista de puntos [lat, lng], mínimo 3 distintos
+{ "nombre": "Cuadrante", "tipo": "poligono",
+  "poligono": [[3.44, -76.54], [3.44, -76.53], [3.45, -76.53], [3.45, -76.54]],
+  "tarifa_domicilio": "3000", "pedido_minimo": "0", "tiempo_estimado_min": 25 }
+```
+
+- Radio: distancia con la fórmula del haversine. Polígono: algoritmo de *ray casting*; un punto sobre el borde cuenta como cubierto.
+- Al cambiar el tipo, los campos del otro tipo se limpian.
+- Si varias zonas de la sede cubren el mismo punto, se usa la de menor tarifa.
+- Solo cuentan zonas activas de sedes activas de negocios activos.
+- La lógica está en `apps/cobertura/services.py` (`zona_para_entrega`, `zonas_que_cubren`).
 
 ### 3.3 Catálogo e inventario
 
@@ -347,7 +408,7 @@ El modelo se llama `InventarioSede` (tabla `inventario_inventariosede`).
 
 - Exactamente un tipo de descuento: `porcentaje_descuento` o `monto_descuento`.
 - `codigo` es único **dentro de cada negocio**: dos negocios pueden usar el mismo código.
-- **Limitación actual:** las promociones se gestionan y se listan, pero todavía no se aplican al crear un pedido.
+- Las promociones se aplican al pedido con `codigo_promocion` o `promocion_id`. Ver [Promociones en el pedido](#promociones-en-el-pedido).
 
 ### 3.4 Pedidos y cocina
 
@@ -355,7 +416,9 @@ El modelo se llama `InventarioSede` (tabla `inventario_inventariosede`).
 |---|---|---|---|
 | GET | `/pedidos/` | Cliente, Cocina, Operador, Repartidor, Admin | Pedidos visibles para el usuario. Filtros: `sede`, `estado` y `fecha` |
 | POST | `/pedidos/` | Cliente, Operador, Admin | Crea un pedido y descuenta inventario |
+| POST | `/pedidos/cotizar/` | Cliente, Operador, Admin | Mismo cuerpo que crear: devuelve el desglose sin guardar nada |
 | PATCH | `/pedidos/{id}/estado/` | Cocina, Operador, Repartidor, Admin | Avanza el estado. Cuerpo: `estado` y `comentario` opcional |
+| POST | `/pedidos/{id}/cancelar/` | Cliente (dueño del pedido) | Cancela el pedido si está en `recibido`. Cuerpo: `motivo` opcional |
 
 `estado` admite varios valores separados por coma: `?estado=recibido,en_preparacion`.
 
@@ -381,6 +444,7 @@ El modelo se llama `InventarioSede` (tabla `inventario_inventariosede`).
   "entrega_lat": "3.45160000",
   "entrega_lng": "-76.53200000",
   "observaciones": "Tocar el timbre",
+  "codigo_promocion": "MARTES10",
   "detalles": [
     {
       "producto_id": "uuid",
@@ -399,6 +463,13 @@ Reglas:
 - La cantidad máxima por línea es 10.
 - Cada producto debe venderse en la sede, y cada opción debe pertenecer a su producto y estar activa.
 - Precios y totales se calculan en el servidor. Nombres y precios se guardan como copia, para que el historial no cambie si se edita el menú.
+- **`costo_domicilio` y `descuento` no se reciben:** si vienen en la petición se ignoran.
+- **Validaciones del servidor**, en este orden (el primer problema se devuelve como `{"detail": "..."}` con 400):
+  1. La sede está abierta según su horario de hoy. Si no: "La sede X está cerrada en este momento. Hoy atiende de 08:00 a 20:00." o "La sede X no atiende hoy."
+  2. A domicilio, el punto cae en una zona activa de la sede. Si no: **"Tu dirección está fuera de la zona de cobertura"**.
+  3. A domicilio, el subtotal alcanza el `pedido_minimo` de la zona. Si no: "El pedido mínimo para tu zona (Centro) es $20.000. Te faltan $5.000."
+  4. La promoción, si se envió, es válida (ver abajo).
+- Al confirmar se guardan `zona`, `costo_domicilio` (la tarifa de la zona; 0 al recoger), `promocion`, `descuento` y `tiempo_estimado_entrega` (ahora + minutos de la zona, o el mayor tiempo de preparación al recoger).
 - El **stock se descuenta al crear el pedido**, no al cambiar de estado. Los combos descuentan cada componente. Sin existencias suficientes responde 400 y no se guarda nada.
 - Si el stock llega al mínimo, se genera una notificación de stock bajo.
 
@@ -406,8 +477,56 @@ Según quién crea el pedido:
 
 | Rol | Comportamiento |
 |---|---|
-| Cliente | Compra siempre a su nombre: se ignoran `cliente_id` y `descuento` |
+| Cliente | Compra siempre a su nombre: se ignora `cliente_id` |
 | Operador, Admin | Solo en sedes que gestionan. Pueden enviar `cliente_id` de un cliente activo |
+
+#### Cotizar un pedido
+
+`POST /pedidos/cotizar/` recibe el mismo cuerpo que la creación y no guarda nada. El carrito lo usa para mostrar el desglose antes de confirmar. Los problemas de negocio no fallan la petición: se devuelven en `problemas`.
+
+```jsonc
+// 200 OK
+{
+  "subtotal": "30000.00",
+  "descuento": "3000.00",
+  "costo_domicilio": "4000.00",
+  "total": "31000.00",
+  "tiempo_estimado_min": 35,
+  "zona": { "id": "uuid", "nombre": "Centro", "pedido_minimo": "20000.00", "tiempo_estimado_min": 35 },
+  "promocion": { "id": "uuid", "nombre": "Martes 10%", "codigo": "MARTES10" },
+  "error_promocion": "",
+  "problemas": [],
+  "puede_confirmar": true
+}
+```
+
+Solo responde 400 por errores de estructura: un producto que no existe o no se vende en la sede, una opción ajena, etc.
+
+#### Promociones en el pedido
+
+Se envía `codigo_promocion` (sin distinguir mayúsculas) o `promocion_id`. Solo se buscan promociones del negocio de la sede. Mensajes de rechazo:
+
+| Regla | Mensaje |
+|---|---|
+| No existe | "El código de promoción no existe." |
+| Inactiva o de otro negocio | "La promoción no está disponible." |
+| Es de otra sede | "La promoción no aplica en esta sede." |
+| Antes de `fecha_inicio` / después de `fecha_fin` | "La promoción empieza el dd/mm/aaaa." / "La promoción ya no está vigente." |
+| Subtotal menor que `pedido_minimo` | "La promoción requiere un pedido mínimo de $X. Te faltan $Y." |
+| Tiene productos aplicables y ninguno está en el pedido | "La promoción no aplica a los productos de tu pedido." |
+| Ya se usó `cupo_maximo_diario` veces hoy | "La promoción agotó su cupo de hoy." |
+
+- El descuento se calcula sobre la suma de los productos aplicables (o todo el subtotal si la promoción no tiene productos) y nunca la supera.
+- **Cupo diario:** se cuenta como los pedidos de hoy con esa promoción que no están cancelados. Cada pedido confirmado consume 1; cancelar lo libera. Al crear el pedido la fila de la promoción se bloquea (`select_for_update`) para que dos pedidos simultáneos no superen el cupo.
+
+#### Cancelación por el cliente
+
+`POST /pedidos/{id}/cancelar/` (HU-5.6):
+
+- Solo el cliente dueño del pedido; para cualquier otro cliente el pedido no existe (404). El personal recibe 403.
+- Solo en estado `recibido`; en otro estado responde 400 y no cambia nada.
+- Pasa a `cancelado`, guarda `motivo_cancelacion` (o "Cancelado por el cliente."), **devuelve las existencias** al inventario de la sede (los combos devuelven sus componentes) y deja la fila en `HistorialEstado`.
+- Las respuestas de pedidos incluyen `puede_cancelar`, `motivo_cancelacion`, `zona_nombre` y `promocion_nombre`.
 
 #### Flujo de estados
 
@@ -419,7 +538,9 @@ stateDiagram-v2
     listo_despacho --> entregado: tipo recoger
     listo_despacho --> en_camino: tipo domicilio
     en_camino --> entregado
+    recibido --> cancelado: el cliente cancela
     entregado --> [*]
+    cancelado --> [*]
 ```
 
 | Estado | Significado |
@@ -429,7 +550,7 @@ stateDiagram-v2
 | `listo_despacho` | Listo para recoger o despachar |
 | `en_camino` | El domicilio salió a entrega |
 | `entregado` | Finalizado |
-| `cancelado` | Definido en el modelo; aún no hay endpoint para llegar a él |
+| `cancelado` | Cancelado por el cliente mientras estaba en `recibido` |
 
 - La regla vive en `estados_siguientes()`. Las respuestas incluyen `estados_siguientes`, para que el frontend no la duplique.
 - Una transición inválida responde 400 y no cambia nada.
@@ -454,13 +575,11 @@ Un repartidor no puede mover pedidos que siguen en cocina, ni pedidos para recog
 
 | Tema | Estado actual |
 |---|---|
-| Registro público | No verifica el correo ni limita intentos. Debe resolverse antes de desplegar |
-| Promociones | No se aplican al pedido |
-| Costo de domicilio | Lo envía quien crea el pedido; el frontend no lo envía, así que queda en $0 |
-| Cancelación | No hay endpoint; tampoco devolución de stock |
-| Horarios y feriados | Los horarios se guardan, pero no se valida si la sede está abierta al pedir. Los feriados no tienen endpoints |
-| Cobertura y capacidad | Solo existen los modelos; no se validan al pedir |
-| Administración de negocios | Desactivar un negocio o un cliente solo es posible desde el admin de Django |
+| Registro público | No verifica el correo del cliente al registrarse |
+| Feriados | Solo existe el modelo; no se validan al pedir |
+| Capacidad | Solo existe el modelo `CapacidadFranja`; no se valida al pedir (Sprint 5) |
+| Correo | Se usa el backend de consola de Django; para enviar correos reales hay que configurar SMTP |
+| Administración de negocios | Desactivar un negocio solo es posible desde el admin de Django |
 | Documentación interactiva | No hay Swagger/OpenAPI generado; este documento es la referencia |
 
 ## 5. Pruebas
@@ -470,4 +589,6 @@ cd backend
 .venv/bin/python -m pytest -q
 ```
 
-Incluyen aislamiento entre negocios, permisos por rol, flujo de estados, descuento de inventario y reparto.
+Incluyen aislamiento entre negocios, permisos por rol, flujo de estados, descuento y devolución de inventario, reparto, bloqueo de login, activación de personal, cobertura por radio y polígono, pedido mínimo, horario, promociones con cupo diario, cancelación y registro rápido de clientes.
+
+Las pruebas que crean pedidos usan `habilitar_sede_para_pedidos(sede)` (`apps/core/datos_prueba.py`): deja la sede abierta todo el día y con una zona de 50 km alrededor del punto de prueba.

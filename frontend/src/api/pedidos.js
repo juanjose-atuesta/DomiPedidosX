@@ -15,3 +15,14 @@ export async function crearPedido(datos) {
   const { data } = await api.post("/pedidos/", datos)
   return data
 }
+
+// Desglose (subtotal, descuento, domicilio, total) y problemas antes de confirmar.
+export async function cotizarPedido(datos) {
+  const { data } = await api.post("/pedidos/cotizar/", datos)
+  return data
+}
+
+export async function cancelarPedido(id, motivo = "") {
+  const { data } = await api.post(`/pedidos/${id}/cancelar/`, { motivo })
+  return data
+}

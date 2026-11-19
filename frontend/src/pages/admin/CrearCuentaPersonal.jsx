@@ -15,8 +15,6 @@ const FORMULARIO_VACIO = {
   apellido: "",
   telefono: "",
   email: "",
-  password: "",
-  password_confirmacion: "",
   rol: ROLES.OPERADOR,
 }
 
@@ -71,11 +69,6 @@ export default function CrearCuentaPersonal() {
     evento.preventDefault()
     setError("")
 
-    if (formulario.password !== formulario.password_confirmacion) {
-      setError("Las contraseñas no coinciden.")
-      return
-    }
-
     if (
       formulario.rol !== ROLES.ADMIN &&
       sedesSeleccionadas.length === 0
@@ -92,14 +85,15 @@ export default function CrearCuentaPersonal() {
         apellido: formulario.apellido.trim(),
         telefono: formulario.telefono.trim(),
         email: formulario.email.trim(),
-        password: formulario.password,
-        password_confirmacion: formulario.password_confirmacion,
         rol: formulario.rol,
         sedes_ids: sedesSeleccionadas,
       })
 
       navigate("/admin/usuarios", {
-        state: { mensaje: "Cuenta de personal creada correctamente." },
+        state: {
+          mensaje:
+            "Cuenta creada. Enviamos al correo del empleado un enlace para que defina su contraseña (vence en 24 horas).",
+        },
       })
     } catch (err) {
       setError(
@@ -155,22 +149,6 @@ export default function CrearCuentaPersonal() {
               onChange={actualizarCampo("telefono")}
               required
             />
-            <CampoTexto
-              etiqueta="Contraseña temporal"
-              type="password"
-              placeholder="Escribe aquí"
-              value={formulario.password}
-              onChange={actualizarCampo("password")}
-              required
-            />
-            <CampoTexto
-              etiqueta="Confirmar contraseña temporal"
-              type="password"
-              placeholder="Escribe aquí"
-              value={formulario.password_confirmacion}
-              onChange={actualizarCampo("password_confirmacion")}
-              required
-            />
             <CampoSelect
               etiqueta="Rol"
               opciones={OPCIONES_ROL_PERSONAL}
@@ -215,7 +193,9 @@ export default function CrearCuentaPersonal() {
           {errorSedes && <MensajeAlerta tipo="error">{errorSedes}</MensajeAlerta>}
 
           <MensajeAlerta tipo="info">
-            El rol define a qué módulo podrá entrar esta persona.
+            El rol define a qué módulo podrá entrar esta persona. No necesitas
+            crearle una contraseña: le enviaremos a su correo un enlace de un
+            solo uso, válido por 24 horas, para que la defina.
           </MensajeAlerta>
 
           {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}

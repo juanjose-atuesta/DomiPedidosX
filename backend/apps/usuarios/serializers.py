@@ -6,7 +6,22 @@ from rest_framework.exceptions import AuthenticationFailed
 
 from apps.sedes.models import Sede
 from .models import User, Direccion, Rol
-from .services import ROLES_OPERATIVOS, ROLES_PERSONAL
+from .services import (
+    ROLES_OPERATIVOS,
+    ROLES_PERSONAL,
+    activacion_pendiente,
+    minutos_restantes_bloqueo,
+    registrar_intento_fallido,
+    reiniciar_intentos,
+)
+
+
+def mensaje_bloqueo(minutos):
+    unidad = "minuto" if minutos == 1 else "minutos"
+    return (
+        "Tu cuenta está bloqueada temporalmente por demasiados intentos "
+        f"fallidos. Intenta de nuevo en {minutos} {unidad}."
+    )
 
 
 class RegistroClienteSerializer(serializers.ModelSerializer):
@@ -69,18 +84,36 @@ class LoginSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         email = attrs[self.username_field].strip().lower()
         attrs[self.username_field] = email
+        cuenta = User.objects.filter(email=email).first()
+
+        # Mientras dure el bloqueo ni siquiera la clave correcta abre sesión.
+        if cuenta is not None and cuenta.is_active:
+            minutos = minutos_restantes_bloqueo(cuenta)
+            if minutos:
+                raise AuthenticationFailed(
+                    mensaje_bloqueo(minutos), "cuenta_bloqueada"
+                )
+
         try:
             data = super().validate(attrs)
         except AuthenticationFailed:
             # Solo quien conoce la clave puede saber que la cuenta está
             # desactivada; en cualquier otro caso el mensaje es el genérico.
-            inactivo = User.objects.filter(email=email, is_active=False).first()
-            if inactivo and inactivo.check_password(attrs["password"]):
+            if cuenta is not None and not cuenta.is_active:
+                if cuenta.check_password(attrs["password"]):
+                    raise AuthenticationFailed(
+                        "Cuenta desactivada", "cuenta_desactivada"
+                    )
+                raise
+            if cuenta is not None and registrar_intento_fallido(cuenta):
+                cuenta.refresh_from_db(fields=["bloqueado_hasta"])
                 raise AuthenticationFailed(
-                    "Cuenta desactivada", "cuenta_desactivada"
+                    mensaje_bloqueo(minutos_restantes_bloqueo(cuenta)),
+                    "cuenta_bloqueada",
                 )
             raise
 
+        reiniciar_intentos(self.user)
         data["user"] = UsuarioSerializer(self.user).data
         return data
 
@@ -119,9 +152,10 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
 
 class RegistroPersonalSerializer(serializers.ModelSerializer):
+    """Alta de personal. No lleva contraseña: el empleado la define con el
+    enlace de activación que recibe por correo."""
+
     email = serializers.EmailField(max_length=150)
-    password = serializers.CharField(write_only=True, min_length=8)
-    password_confirmacion = serializers.CharField(write_only=True)
     rol = serializers.ChoiceField(choices=ROLES_PERSONAL)
     sedes_ids = serializers.ListField(
         child=serializers.UUIDField(),
@@ -139,8 +173,6 @@ class RegistroPersonalSerializer(serializers.ModelSerializer):
             "telefono",
             "rol",
             "sedes_ids",
-            "password",
-            "password_confirmacion",
         )
 
     def validate_email(self, value):
@@ -152,24 +184,6 @@ class RegistroPersonalSerializer(serializers.ModelSerializer):
         return email
 
     def validate(self, data):
-        password = data.get("password")
-        if password != data.pop("password_confirmacion", None):
-            raise serializers.ValidationError(
-                {"password": "Las contraseñas no coinciden"}
-            )
-
-        usuario = User(
-            email=data.get("email", ""),
-            nombre=data.get("nombre", ""),
-            apellido=data.get("apellido", ""),
-            telefono=data.get("telefono", ""),
-            rol=data.get("rol", ""),
-        )
-        try:
-            password_validation.validate_password(password, usuario)
-        except DjangoValidationError as exc:
-            raise serializers.ValidationError({"password": list(exc.messages)})
-
         sedes_ids = list(dict.fromkeys(data.get("sedes_ids", [])))
         if data.get("rol") in ROLES_OPERATIVOS and not sedes_ids:
             raise serializers.ValidationError(
@@ -188,11 +202,24 @@ class RegistroPersonalSerializer(serializers.ModelSerializer):
 
 class PersonalSerializer(serializers.ModelSerializer):
     sedes = serializers.SerializerMethodField()
+    activacion_pendiente = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "nombre", "apellido", "email", "telefono", "rol", "sedes")
+        fields = (
+            "id",
+            "nombre",
+            "apellido",
+            "email",
+            "telefono",
+            "rol",
+            "sedes",
+            "activacion_pendiente",
+        )
         read_only_fields = fields
+
+    def get_activacion_pendiente(self, obj):
+        return activacion_pendiente(obj)
 
     def get_sedes(self, obj):
         return [
@@ -212,6 +239,35 @@ class ConfirmarPasswordResetSerializer(serializers.Serializer):
     uidb64 = serializers.CharField()
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True, min_length=8)
+
+
+class ActivarCuentaSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    password = serializers.CharField(write_only=True, min_length=8)
+    password_confirmacion = serializers.CharField(write_only=True)
+
+    def validate(self, data):
+        if data["password"] != data.pop("password_confirmacion"):
+            raise serializers.ValidationError(
+                {"password_confirmacion": "Las contraseñas no coinciden"}
+            )
+        return data
+
+
+class DesactivarCuentaSerializer(serializers.Serializer):
+    # Se pide la contraseña para que nadie desactive la cuenta con un
+    # dispositivo olvidado con la sesión abierta.
+    password = serializers.CharField(write_only=True)
+
+
+class RegistroRapidoClienteSerializer(serializers.Serializer):
+    nombre = serializers.CharField(max_length=100)
+    apellido = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    telefono = serializers.RegexField(
+        r"^\d{10}$",
+        error_messages={"invalid": "El teléfono debe tener exactamente 10 dígitos."},
+    )
+    email = serializers.EmailField(max_length=150, required=False, allow_blank=True)
 
 
 class ActualizarPerfilSerializer(serializers.ModelSerializer):

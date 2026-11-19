@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.core.datos_prueba import habilitar_sede_para_pedidos
 from apps.inventario.models import InventarioSede
 from apps.menu.models import Categoria, Producto
 from apps.pedidos.models import Pedido
@@ -37,6 +38,7 @@ class DatosDosNegocios(APITestCase):
         operador = self._usuario(f"operador{letra}@example.com", Rol.OPERADOR, negocio)
         cocina = self._usuario(f"cocina{letra}@example.com", Rol.COCINA, negocio)
         sede = Sede.objects.create(negocio=negocio, nombre=f"Sede {letra}", direccion="Calle 1")
+        habilitar_sede_para_pedidos(sede)
         SedeUsuario.objects.create(usuario=operador, sede=sede)
         SedeUsuario.objects.create(usuario=cocina, sede=sede)
         categoria = Categoria.objects.create(negocio=negocio, nombre=f"Categoria {letra}")

@@ -6,7 +6,11 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.core.datos_prueba import negocio_de_rol, negocio_prueba
+from apps.core.datos_prueba import (
+    habilitar_sede_para_pedidos,
+    negocio_de_rol,
+    negocio_prueba,
+)
 from apps.inventario.models import InventarioSede
 from apps.menu.models import (
     GrupoOpcion,
@@ -15,6 +19,7 @@ from apps.menu.models import (
     ProductoCombo,
 )
 from apps.notificaciones.models import Notificacion, TipoNotificacion
+from apps.promociones.models import Promocion, PromocionProducto
 from apps.sedes.models import Sede, SedeUsuario
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
@@ -48,6 +53,7 @@ class PedidoInventarioTests(APITestCase):
             direccion="Calle 20 # 30-40",
         )
         SedeUsuario.objects.create(usuario=self.operador, sede=self.sede)
+        habilitar_sede_para_pedidos(self.sede)
 
         self.producto = Producto.objects.create(
             negocio=negocio_prueba(),
@@ -249,6 +255,8 @@ class PedidoOperacionTests(APITestCase):
     def setUp(self):
         self.sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Sede Norte", direccion="Calle 1")
         self.otra_sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Sede Sur", direccion="Calle 2")
+        for sede in (self.sede, self.otra_sede):
+            habilitar_sede_para_pedidos(sede)
 
         self.admin = self._crear_usuario(Rol.ADMIN, "admin@example.com")
         self.operador = self._crear_usuario(Rol.OPERADOR, "operador@example.com")
@@ -708,6 +716,8 @@ class PedidoRepartidorTests(APITestCase):
         self.otra_sede = Sede.objects.create(
             negocio=negocio_prueba(), nombre="Sede Sur", direccion="Calle 2"
         )
+        for sede in (self.sede, self.otra_sede):
+            habilitar_sede_para_pedidos(sede)
         self.repartidor = self._crear_repartidor("repartidor@example.com")
         self.colega = self._crear_repartidor("colega@example.com")
         self.producto = Producto.objects.create(
@@ -851,3 +861,374 @@ class PedidoRepartidorTests(APITestCase):
             **self._auth(self.repartidor),
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class _BaseCheckout(APITestCase):
+    """Sede con zona de 3 km (tarifa $4.000, mínimo $20.000) y dos productos."""
+
+    def setUp(self):
+        self.sede = Sede.objects.create(
+            negocio=negocio_prueba(), nombre="Centro", direccion="Calle 1"
+        )
+        self.zona = habilitar_sede_para_pedidos(
+            self.sede, tarifa="4000", pedido_minimo="20000", radio_km="3"
+        )
+        self.cliente = User.objects.create_user(
+            email="checkout@example.com", password=PASSWORD, nombre="Ana",
+            apellido="Compra", telefono="3100000000",
+        )
+        self.hamburguesa = self._producto("Hamburguesa", "15000")
+        self.limonada = self._producto("Limonada", "5000")
+        self.inv_hamburguesa = InventarioSede.objects.create(
+            sede=self.sede, producto=self.hamburguesa, stock_actual=20, stock_minimo=1
+        )
+        self.inv_limonada = InventarioSede.objects.create(
+            sede=self.sede, producto=self.limonada, stock_actual=20, stock_minimo=1
+        )
+        self.url = reverse("pedido_list_create")
+
+    def _producto(self, nombre, precio):
+        return Producto.objects.create(
+            negocio=negocio_prueba(), nombre=nombre,
+            precio_base=Decimal(precio), tiempo_preparacion_min=10,
+        )
+
+    def _auth(self, usuario=None):
+        token = LoginSerializer.get_token(usuario or self.cliente).access_token
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _payload(self, lineas=None, *, lat="3.45", lng="-76.53", **extra):
+        lineas = lineas or [(self.hamburguesa, 2)]
+        return {
+            "sede_id": str(self.sede.pk),
+            "tipo": "domicilio",
+            "direccion_entrega": "Calle 5 # 38-20",
+            "entrega_lat": lat,
+            "entrega_lng": lng,
+            "detalles": [
+                {"producto_id": str(p.pk), "cantidad": c} for p, c in lineas
+            ],
+            **extra,
+        }
+
+    def _pedir(self, datos, usuario=None):
+        return self.client.post(self.url, datos, format="json", **self._auth(usuario))
+
+
+class CoberturaPedidoTests(_BaseCheckout):
+    """HU-8.5 a 8.8: cobertura, tarifa, pedido mínimo y horario en el servidor."""
+
+    def test_domicilio_calcula_tarifa_y_asigna_la_zona(self):
+        respuesta = self._pedir(self._payload())
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED, respuesta.data)
+        self.assertEqual(respuesta.data["subtotal"], "30000.00")
+        self.assertEqual(respuesta.data["costo_domicilio"], "4000.00")
+        self.assertEqual(respuesta.data["total"], "34000.00")
+        self.assertEqual(respuesta.data["zona_nombre"], "Zona de prueba")
+        pedido = Pedido.objects.get()
+        self.assertEqual(pedido.zona, self.zona)
+        self.assertIsNotNone(pedido.tiempo_estimado_entrega)
+
+    def test_el_cliente_no_fija_el_costo_de_domicilio(self):
+        respuesta = self._pedir(self._payload(costo_domicilio="0", descuento="30000"))
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["costo_domicilio"], "4000.00")
+        self.assertEqual(respuesta.data["descuento"], "0.00")
+
+    def test_direccion_fuera_de_cobertura_se_rechaza(self):
+        respuesta = self._pedir(self._payload(lat="3.60"))  # ~17 km al norte
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            str(respuesta.data["detail"]), "Tu dirección está fuera de la zona de cobertura"
+        )
+        self.assertEqual(Pedido.objects.count(), 0)
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 20)
+
+    def test_cobertura_por_poligono(self):
+        self.zona.tipo = "poligono"
+        self.zona.poligono = [[3.44, -76.54], [3.44, -76.52], [3.46, -76.52], [3.46, -76.54]]
+        self.zona.centro_lat = self.zona.centro_lng = self.zona.radio_km = None
+        self.zona.save()
+
+        dentro = self._pedir(self._payload(lat="3.45", lng="-76.53"))
+        fuera = self._pedir(self._payload(lat="3.45", lng="-76.50"))
+
+        self.assertEqual(dentro.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(fuera.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pedido_minimo_indica_cuanto_falta(self):
+        respuesta = self._pedir(self._payload([(self.hamburguesa, 1)]))  # $15.000
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        mensaje = str(respuesta.data["detail"])
+        self.assertIn("$20.000", mensaje)
+        self.assertIn("Te faltan $5.000", mensaje)
+
+    def test_recoger_en_sede_no_exige_cobertura_ni_minimo(self):
+        datos = self._payload([(self.limonada, 1)], lat="9.0")
+        datos["tipo"] = "recoger"
+
+        respuesta = self._pedir(datos)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["costo_domicilio"], "0.00")
+        self.assertIsNone(respuesta.data["zona_nombre"])
+
+    def test_sede_cerrada_no_recibe_pedidos(self):
+        hoy = timezone.localtime().isoweekday()
+        self.sede.horarios.filter(dia_semana=hoy).delete()
+
+        respuesta = self._pedir(self._payload())
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no atiende hoy", str(respuesta.data["detail"]))
+
+    def test_sede_fuera_de_su_horario_del_dia(self):
+        from datetime import time
+
+        hoy = timezone.localtime().isoweekday()
+        self.sede.horarios.filter(dia_semana=hoy).update(
+            hora_apertura=time(0, 0), hora_cierre=time(0, 0, 1)
+        )
+        with self.subTest("cerrada"):
+            respuesta = self._pedir(self._payload())
+            self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertIn("cerrada en este momento", str(respuesta.data["detail"]))
+
+    def test_zona_inactiva_deja_la_direccion_sin_cobertura(self):
+        self.zona.activa = False
+        self.zona.save()
+
+        respuesta = self._pedir(self._payload())
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class PromocionPedidoTests(_BaseCheckout):
+    """HU-5.3: la promoción se valida y se descuenta en el servidor."""
+
+    def _promo(self, **extra):
+        hoy = timezone.localdate()
+        datos = {
+            "negocio": negocio_prueba(), "nombre": "Martes 10%", "codigo": "MARTES10",
+            "porcentaje_descuento": Decimal("10"), "cupo_maximo_diario": 2,
+            "fecha_inicio": hoy, "fecha_fin": hoy + timedelta(days=5),
+        }
+        datos.update(extra)
+        return Promocion.objects.create(**datos)
+
+    def test_aplica_porcentaje_por_codigo_sin_distinguir_mayusculas(self):
+        promo = self._promo()
+
+        respuesta = self._pedir(self._payload(codigo_promocion="martes10"))
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED, respuesta.data)
+        self.assertEqual(respuesta.data["descuento"], "3000.00")
+        self.assertEqual(respuesta.data["total"], "31000.00")  # 30000 + 4000 - 3000
+        self.assertEqual(Pedido.objects.get().promocion, promo)
+
+    def test_monto_fijo_por_id(self):
+        promo = self._promo(codigo=None, porcentaje_descuento=None, monto_descuento=Decimal("5000"))
+
+        respuesta = self._pedir(self._payload(promocion_id=str(promo.pk)))
+
+        self.assertEqual(respuesta.data["descuento"], "5000.00")
+
+    def test_cupo_diario_se_consume_y_se_agota(self):
+        self._promo(cupo_maximo_diario=2)
+
+        for _ in range(2):
+            self.assertEqual(
+                self._pedir(self._payload(codigo_promocion="MARTES10")).status_code,
+                status.HTTP_201_CREATED,
+            )
+        tercero = self._pedir(self._payload(codigo_promocion="MARTES10"))
+
+        self.assertEqual(tercero.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("agotó su cupo de hoy", str(tercero.data["detail"]))
+        self.assertEqual(Pedido.objects.count(), 2)
+
+    def test_cupo_de_ayer_no_cuenta_y_cancelar_libera_cupo(self):
+        self._promo(cupo_maximo_diario=1)
+        primero = self._pedir(self._payload(codigo_promocion="MARTES10")).data["id"]
+        self.assertEqual(
+            self._pedir(self._payload(codigo_promocion="MARTES10")).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        self.client.post(reverse("pedido_cancelar", args=[primero]), **self._auth())
+        self.assertEqual(
+            self._pedir(self._payload(codigo_promocion="MARTES10")).status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        Pedido.objects.update(creado_en=timezone.now() - timedelta(days=1))
+        self.assertEqual(
+            self._pedir(self._payload(codigo_promocion="MARTES10")).status_code,
+            status.HTTP_201_CREATED,
+        )
+
+    def test_vigencia_y_estado(self):
+        hoy = timezone.localdate()
+        casos = {
+            "VENCIDA": {"fecha_inicio": hoy - timedelta(days=5), "fecha_fin": hoy - timedelta(days=1)},
+            "FUTURA": {"fecha_inicio": hoy + timedelta(days=1), "fecha_fin": hoy + timedelta(days=3)},
+            "INACTIVA": {"activa": False},
+        }
+        for codigo, extra in casos.items():
+            self._promo(codigo=codigo, nombre=codigo, **extra)
+            with self.subTest(codigo=codigo):
+                respuesta = self._pedir(self._payload(codigo_promocion=codigo))
+                self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            str(self._pedir(self._payload(codigo_promocion="NOEXISTE")).data["detail"]),
+            "El código de promoción no existe.",
+        )
+
+    def test_monto_minimo_de_la_promocion(self):
+        self._promo(pedido_minimo=Decimal("50000"))
+
+        respuesta = self._pedir(self._payload(codigo_promocion="MARTES10"))
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Te faltan $20.000", str(respuesta.data["detail"]))
+
+    def test_productos_aplicables(self):
+        promo = self._promo(porcentaje_descuento=Decimal("50"))
+        PromocionProducto.objects.create(promocion=promo, producto=self.limonada)
+
+        sin_limonada = self._pedir(self._payload(codigo_promocion="MARTES10"))
+        con_limonada = self._pedir(
+            self._payload([(self.hamburguesa, 2), (self.limonada, 2)], codigo_promocion="MARTES10")
+        )
+
+        self.assertEqual(sin_limonada.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no aplica a los productos", str(sin_limonada.data["detail"]))
+        # 50 % solo sobre las limonadas: 10.000 * 0,5
+        self.assertEqual(con_limonada.data["descuento"], "5000.00")
+
+    def test_promocion_de_otra_sede_no_aplica(self):
+        otra = Sede.objects.create(negocio=negocio_prueba(), nombre="Sur", direccion="Calle 9")
+        self._promo(sede=otra)
+
+        respuesta = self._pedir(self._payload(codigo_promocion="MARTES10"))
+
+        self.assertIn("no aplica en esta sede", str(respuesta.data["detail"]))
+
+    def test_cotizar_muestra_el_desglose_sin_crear_el_pedido(self):
+        self._promo()
+
+        respuesta = self.client.post(
+            reverse("pedido_cotizar"),
+            self._payload(codigo_promocion="MARTES10"),
+            format="json",
+            **self._auth(),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK, respuesta.data)
+        self.assertEqual(
+            {k: respuesta.data[k] for k in ("subtotal", "descuento", "costo_domicilio", "total")},
+            {"subtotal": "30000.00", "descuento": "3000.00",
+             "costo_domicilio": "4000.00", "total": "31000.00"},
+        )
+        self.assertTrue(respuesta.data["puede_confirmar"])
+        self.assertEqual(respuesta.data["zona"]["nombre"], "Zona de prueba")
+        self.assertEqual(Pedido.objects.count(), 0)
+
+    def test_cotizar_reporta_problemas_sin_fallar(self):
+        respuesta = self.client.post(
+            reverse("pedido_cotizar"),
+            self._payload([(self.hamburguesa, 1)], codigo_promocion="NOEXISTE"),
+            format="json",
+            **self._auth(),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertFalse(respuesta.data["puede_confirmar"])
+        self.assertEqual(respuesta.data["error_promocion"], "El código de promoción no existe.")
+        self.assertEqual(len(respuesta.data["problemas"]), 2)  # mínimo + código
+
+
+class CancelacionPedidoTests(_BaseCheckout):
+    """HU-5.6: el cliente cancela en Recibido y el stock vuelve a la sede."""
+
+    def _cancelar(self, pedido_id, usuario=None, **datos):
+        return self.client.post(
+            reverse("pedido_cancelar", args=[pedido_id]), datos, format="json",
+            **self._auth(usuario),
+        )
+
+    def test_cancelar_devuelve_stock_y_queda_en_el_historial(self):
+        pedido_id = self._pedir(self._payload([(self.hamburguesa, 3)])).data["id"]
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 17)
+
+        respuesta = self._cancelar(pedido_id, motivo="Me equivoqué de dirección")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["estado"], "cancelado")
+        self.assertFalse(respuesta.data["puede_cancelar"])
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 20)
+        ultimo = HistorialEstado.objects.filter(pedido_id=pedido_id).last()
+        self.assertEqual(ultimo.estado, EstadoPedido.CANCELADO)
+        self.assertEqual(ultimo.cambiado_por, self.cliente)
+        self.assertEqual(ultimo.comentario, "Me equivoqué de dirección")
+
+    def test_cancelar_combo_devuelve_sus_componentes(self):
+        combo = self._producto("Combo", "18000")
+        combo.es_combo = True
+        combo.save()
+        ProductoCombo.objects.create(combo=combo, producto=self.hamburguesa, cantidad=1)
+        ProductoCombo.objects.create(combo=combo, producto=self.limonada, cantidad=2)
+        InventarioSede.objects.create(sede=self.sede, producto=combo, stock_actual=5)
+
+        pedido_id = self._pedir(self._payload([(combo, 2)])).data["id"]
+        self.inv_limonada.refresh_from_db()
+        self.assertEqual(self.inv_limonada.stock_actual, 16)
+
+        self._cancelar(pedido_id)
+
+        self.inv_hamburguesa.refresh_from_db()
+        self.inv_limonada.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 20)
+        self.assertEqual(self.inv_limonada.stock_actual, 20)
+
+    def test_solo_se_cancela_en_recibido(self):
+        pedido_id = self._pedir(self._payload()).data["id"]
+        Pedido.objects.filter(pk=pedido_id).update(estado=EstadoPedido.EN_PREPARACION)
+
+        respuesta = self._cancelar(pedido_id)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Recibido", str(respuesta.data["detail"]))
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 18)
+
+    def test_no_cancela_dos_veces_ni_pedidos_ajenos(self):
+        pedido_id = self._pedir(self._payload()).data["id"]
+        otro = User.objects.create_user(
+            email="otro.cliente@example.com", password=PASSWORD, nombre="Otro",
+            apellido="Cliente", telefono="3100000001",
+        )
+
+        self.assertEqual(self._cancelar(pedido_id, otro).status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self._cancelar(pedido_id).status_code, status.HTTP_200_OK)
+        self.assertEqual(self._cancelar(pedido_id).status_code, status.HTTP_400_BAD_REQUEST)
+        self.inv_hamburguesa.refresh_from_db()
+        self.assertEqual(self.inv_hamburguesa.stock_actual, 20)  # no se repone dos veces
+
+    def test_el_personal_no_usa_la_cancelacion_del_cliente(self):
+        operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.cancel@example.com", password=PASSWORD,
+            nombre="Op", apellido="X", telefono="3000000000", rol=Rol.OPERADOR,
+        )
+        pedido_id = self._pedir(self._payload()).data["id"]
+
+        self.assertEqual(
+            self._cancelar(pedido_id, operador).status_code, status.HTTP_403_FORBIDDEN
+        )

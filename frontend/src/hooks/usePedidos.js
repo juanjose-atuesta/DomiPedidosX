@@ -59,5 +59,9 @@ export function usePedidos({ sede, estado, fecha, intervalo = INTERVALO_ACTUALIZ
     }
   }
 
-  return { pedidos, cargando: cargadoDe !== clave, error, procesandoId, avanzar }
+  // Para acciones hechas fuera del hook (p. ej. la cancelación del cliente).
+  const reemplazar = (actualizado) =>
+    setPedidos((actuales) => actuales.map((p) => (p.id === actualizado.id ? actualizado : p)))
+
+  return { pedidos, cargando: cargadoDe !== clave, error, procesandoId, avanzar, reemplazar }
 }

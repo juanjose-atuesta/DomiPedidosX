@@ -92,20 +92,15 @@ class PedidoCreateSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
-    costo_domicilio = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        min_value=0,
+    # El costo de domicilio y el descuento NO se reciben: el servidor los
+    # calcula con la zona de cobertura y la promoción.
+    codigo_promocion = serializers.CharField(
+        max_length=50,
         required=False,
-        default=0,
+        allow_blank=True,
+        default="",
     )
-    descuento = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        min_value=0,
-        required=False,
-        default=0,
-    )
+    promocion_id = serializers.UUIDField(required=False, allow_null=True)
     observaciones = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -142,6 +137,12 @@ class PedidoFiltroSerializer(serializers.Serializer):
         if not estados or any(e not in EstadoPedido.values for e in estados):
             raise serializers.ValidationError("El estado no es valido.")
         return estados
+
+
+class CancelarPedidoSerializer(serializers.Serializer):
+    motivo = serializers.CharField(
+        max_length=300, required=False, allow_blank=True, default=""
+    )
 
 
 class CambioEstadoSerializer(serializers.Serializer):
@@ -182,6 +183,14 @@ class PedidoSerializer(serializers.ModelSerializer):
     cliente_id = serializers.UUIDField(read_only=True, allow_null=True)
     detalles = DetallePedidoSalidaSerializer(many=True, read_only=True)
     estados_siguientes = serializers.SerializerMethodField()
+    zona_nombre = serializers.CharField(source="zona.nombre", read_only=True, default=None)
+    promocion_nombre = serializers.CharField(
+        source="promocion.nombre", read_only=True, default=None
+    )
+    puede_cancelar = serializers.SerializerMethodField()
+
+    def get_puede_cancelar(self, pedido):
+        return pedido.estado == EstadoPedido.RECIBIDO
 
     def get_estados_siguientes(self, pedido):
         return estados_siguientes(pedido)
@@ -202,6 +211,10 @@ class PedidoSerializer(serializers.ModelSerializer):
             "direccion_entrega",
             "estado",
             "estados_siguientes",
+            "puede_cancelar",
+            "motivo_cancelacion",
+            "zona_nombre",
+            "promocion_nombre",
             "metodo_pago",
             "subtotal",
             "costo_domicilio",
