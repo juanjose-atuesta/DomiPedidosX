@@ -5,6 +5,9 @@ from apps.core.models import ModeloUUID
 
 
 class Categoria(ModeloUUID):
+    negocio = models.ForeignKey(
+        "negocios.Negocio", on_delete=models.PROTECT, related_name="categorias"
+    )
     nombre = models.CharField(max_length=100)
     descripcion = models.TextField(blank=True)
     orden = models.IntegerField(default=0)
@@ -18,6 +21,9 @@ class Categoria(ModeloUUID):
 
 
 class Producto(ModeloUUID):
+    negocio = models.ForeignKey(
+        "negocios.Negocio", on_delete=models.PROTECT, related_name="productos"
+    )
     categoria = models.ForeignKey(
         Categoria, on_delete=models.SET_NULL, null=True, blank=True, related_name="productos"
     )

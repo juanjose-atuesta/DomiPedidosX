@@ -8,16 +8,19 @@ class Promocion(ModeloUUID):
     """
     Promoción con vigencia, condiciones y cupo máximo diario.
     El cupo usado se cuenta desde Pedido.promocion (pedidos no cancelados del día).
-    sede = NULL significa que aplica a todas las sedes.
+    sede = NULL significa que aplica a todas las sedes del negocio.
     """
 
+    negocio = models.ForeignKey(
+        "negocios.Negocio", on_delete=models.PROTECT, related_name="promociones"
+    )
     sede = models.ForeignKey(
         "sedes.Sede", on_delete=models.CASCADE, null=True, blank=True, related_name="promociones"
     )
     nombre = models.CharField(max_length=100)
     descripcion = models.TextField(blank=True)
     # guardar None (no "") cuando no haya código, para que el unique funcione
-    codigo = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    codigo = models.CharField(max_length=50, null=True, blank=True)
     porcentaje_descuento = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     monto_descuento = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     pedido_minimo = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -31,6 +34,8 @@ class Promocion(ModeloUUID):
         verbose_name_plural = "promociones"
         indexes = [models.Index(fields=["activa", "fecha_inicio", "fecha_fin"], name="idx_promo_vigencia")]
         constraints = [
+            # cada negocio administra sus propios códigos
+            models.UniqueConstraint(fields=["negocio", "codigo"], name="uq_promo_codigo_por_negocio"),
             models.CheckConstraint(condition=Q(fecha_fin__gte=F("fecha_inicio")), name="ck_promo_fechas"),
             models.CheckConstraint(condition=Q(cupo_maximo_diario__gt=0), name="ck_promo_cupo_positivo"),
             # exactamente uno de los dos tipos de descuento

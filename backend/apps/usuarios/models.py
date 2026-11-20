@@ -48,9 +48,20 @@ class User(AbstractBaseUser, PermissionsMixin, ModeloUUID):
     email = models.EmailField(max_length=150, unique=True)
     telefono = models.CharField(max_length=20)
     rol = models.CharField(max_length=20, choices=Rol.choices, default=Rol.CLIENTE)
+    # Personal: el negocio donde trabaja. Los clientes no pertenecen a ninguno.
+    negocio = models.ForeignKey(
+        "negocios.Negocio",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="usuarios",
+    )
     # is_active = False equivale a "desactivar" al usuario (no se borra)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)  # acceso al admin de Django
+    # Bloqueo temporal tras varios intentos fallidos de inicio de sesión.
+    intentos_fallidos = models.PositiveSmallIntegerField(default=0)
+    bloqueado_hasta = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["nombre", "apellido", "telefono"]
@@ -112,7 +123,8 @@ class PerfilRepartidor(models.Model):
         primary_key=True,
         related_name="perfil_repartidor",
     )
-    disponible = models.BooleanField(default=False)
+    # True = libre para recibir un pedido; False = ocupado con una entrega.
+    disponible = models.BooleanField(default=True)
     latitud = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
     longitud = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
     ubicacion_actualizada_en = models.DateTimeField(null=True, blank=True)
@@ -123,3 +135,28 @@ class PerfilRepartidor(models.Model):
 
     def __str__(self):
         return f"Perfil de {self.usuario}"
+
+
+class TokenActivacion(models.Model):
+    """Enlace de un solo uso para que el personal nuevo defina su contraseña.
+
+    Solo se guarda el hash del token: quien lea la base de datos no puede
+    activar cuentas ajenas.
+    """
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tokens_activacion",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    expira_en = models.DateTimeField()
+    usado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "token de activación"
+        verbose_name_plural = "tokens de activación"
+
+    def __str__(self):
+        return f"Activación de {self.usuario}"

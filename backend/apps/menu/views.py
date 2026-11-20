@@ -1,9 +1,11 @@
+from uuid import UUID
+
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import permissions, status
+from rest_framework import permissions, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import EsAdmin, EsOperador
+from apps.core.permissions import EsAdmin, EsOperador, exigir_negocio
 from apps.inventario.models import InventarioSede
 from apps.sedes.models import Sede
 from apps.usuarios.models import Rol
@@ -39,6 +41,32 @@ def _es_gestor(request):
         and usuario.is_active
         and usuario.rol in (Rol.OPERADOR, Rol.ADMIN)
     )
+
+
+def _gestiona(request, objeto):
+    """El objeto pertenece al negocio de quien lo gestiona."""
+    return (
+        objeto is not None
+        and _es_gestor(request)
+        and bool(request.user.negocio_id)
+        and objeto.negocio_id == request.user.negocio_id
+    )
+
+
+def _filtrar_por_negocio(request, consulta):
+    """El personal ve solo su negocio; el público puede filtrar con ?negocio=<id>."""
+    usuario = request.user
+    if usuario.is_authenticated and usuario.rol != Rol.CLIENTE:
+        return consulta.filter(negocio_id=usuario.negocio_id)
+
+    consulta = consulta.filter(negocio__activo=True)
+    negocio = request.query_params.get("negocio", "").strip()
+    if not negocio:
+        return consulta
+    try:
+        return consulta.filter(negocio_id=UUID(negocio))
+    except ValueError:
+        raise serializers.ValidationError({"negocio": "Identificador no válido."})
 
 
 def _obtener_categoria(pk):
@@ -92,16 +120,18 @@ class CategoriaListCreateView(APIView):
         return [permissions.AllowAny()]
 
     def get(self, request):
-        categorias = Categoria.objects.filter(activa=True).order_by(
-            "orden", "nombre"
-        )
+        categorias = _filtrar_por_negocio(
+            request, Categoria.objects.filter(activa=True)
+        ).order_by("orden", "nombre")
         return Response(CategoriaSerializer(categorias, many=True).data)
 
     def post(self, request):
         serializer = CategoriaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        categoria = crear_categoria(**serializer.validated_data)
+        categoria = crear_categoria(
+            negocio=exigir_negocio(request.user), **serializer.validated_data
+        )
         return Response(
             CategoriaSerializer(categoria).data,
             status=status.HTTP_201_CREATED,
@@ -122,7 +152,7 @@ class CategoriaDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not categoria.activa and not _es_gestor(request):
+        if not categoria.activa and not _gestiona(request, categoria):
             return Response(
                 {"detail": "Categoria no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -138,7 +168,7 @@ class CategoriaDetailView(APIView):
 
     def _actualizar(self, request, pk, *, partial):
         categoria = _obtener_categoria(pk)
-        if categoria is None:
+        if not _gestiona(request, categoria):
             return Response(
                 {"detail": "Categoria no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -154,7 +184,7 @@ class CategoriaDetailView(APIView):
 
     def delete(self, request, pk):
         categoria = _obtener_categoria(pk)
-        if categoria is None:
+        if not _gestiona(request, categoria):
             return Response(
                 {"detail": "Categoria no encontrada."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -172,11 +202,14 @@ class ProductoListCreateView(APIView):
 
     def get(self, request):
         productos = (
-            Producto.objects.filter(disponible=True)
+            _filtrar_por_negocio(request, Producto.objects.all())
             .select_related("categoria")
             .prefetch_related("grupos_opcion__opciones")
             .order_by("nombre")
         )
+        incluir = request.query_params.get("incluir_inactivos", "")
+        if not (_es_gestor(request) and incluir.strip().lower() == "true"):
+            productos = productos.filter(disponible=True)
         return Response(ProductoSerializer(productos, many=True).data)
 
     def post(self, request):
@@ -185,7 +218,9 @@ class ProductoListCreateView(APIView):
 
         datos = _datos_producto(serializer.validated_data)
         try:
-            producto = crear_producto(**datos)
+            producto = crear_producto(
+                negocio=exigir_negocio(request.user), **datos
+            )
         except ValueError as exc:
             return Response(
                 {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
@@ -211,7 +246,7 @@ class ProductoDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not producto.disponible and not _es_gestor(request):
+        if not producto.disponible and not _gestiona(request, producto):
             return Response(
                 {"detail": "Producto no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -227,7 +262,7 @@ class ProductoDetailView(APIView):
 
     def _actualizar(self, request, pk, *, partial):
         producto = _obtener_producto(pk)
-        if producto is None:
+        if not _gestiona(request, producto):
             return Response(
                 {"detail": "Producto no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -250,7 +285,7 @@ class ProductoDetailView(APIView):
 
     def delete(self, request, pk):
         producto = _obtener_producto(pk)
-        if producto is None:
+        if not _gestiona(request, producto):
             return Response(
                 {"detail": "Producto no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -276,7 +311,7 @@ class ProductoOpcionesView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not producto.disponible and not _es_gestor(request):
+        if not producto.disponible and not _gestiona(request, producto):
             return Response(
                 {"detail": "Producto no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -287,7 +322,7 @@ class ProductoOpcionesView(APIView):
 
     def post(self, request, pk):
         producto = _obtener_producto(pk)
-        if producto is None:
+        if not _gestiona(request, producto):
             return Response(
                 {"detail": "Producto no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -322,7 +357,9 @@ class ComboListCreateView(APIView):
 
     def get(self, request):
         combos = (
-            Producto.objects.filter(es_combo=True, disponible=True)
+            _filtrar_por_negocio(
+                request, Producto.objects.filter(es_combo=True, disponible=True)
+            )
             .prefetch_related("componentes__producto")
             .order_by("nombre")
         )
@@ -334,7 +371,7 @@ class ComboListCreateView(APIView):
 
         datos = _datos_combo(serializer.validated_data)
         try:
-            combo = crear_combo(**datos)
+            combo = crear_combo(negocio=exigir_negocio(request.user), **datos)
         except ValueError as exc:
             return Response(
                 {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
@@ -360,7 +397,7 @@ class ComboDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not combo.disponible and not _es_gestor(request):
+        if not combo.disponible and not _gestiona(request, combo):
             return Response(
                 {"detail": "Combo no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -376,7 +413,7 @@ class ComboDetailView(APIView):
 
     def _actualizar(self, request, pk, *, partial):
         combo = _obtener_combo(pk)
-        if combo is None:
+        if not _gestiona(request, combo):
             return Response(
                 {"detail": "Combo no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -399,7 +436,7 @@ class ComboDetailView(APIView):
 
     def delete(self, request, pk):
         combo = _obtener_combo(pk)
-        if combo is None:
+        if not _gestiona(request, combo):
             return Response(
                 {"detail": "Combo no encontrado."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -413,7 +450,9 @@ class CatalogoSedeView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, sede_id):
-        sede = Sede.objects.filter(pk=sede_id, activa=True).first()
+        sede = Sede.objects.filter(
+            pk=sede_id, activa=True, negocio__activo=True
+        ).first()
         if sede is None:
             return Response(
                 {"detail": "Sede no encontrada."},

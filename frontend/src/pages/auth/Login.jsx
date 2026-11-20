@@ -1,24 +1,38 @@
 import { useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { Link, Navigate, useLocation } from "react-router-dom"
 import AuthLayout from "../../layouts/AuthLayout"
 import Boton from "../../components/Boton"
 import CampoTexto from "../../components/CampoTexto"
 import MensajeAlerta from "../../components/MensajeAlerta"
 import { fondoRojo, fondoVino } from "../../assets"
+import { useAuth } from "../../context/auth-context"
+import { puedeEntrarA, rutaInicio } from "../../utils/roles"
 
-export default function IniciarSesion() {
-  const navigate = useNavigate()
+export default function Login() {
+  const location = useLocation()
+  const { usuario, cargando, login } = useAuth()
   const [identificador, setIdentificador] = useState("")
   const [contrasena, setContrasena] = useState("")
   const [error, setError] = useState("")
+  const [enviando, setEnviando] = useState(false)
 
-  const ingresar = (e) => {
+  const ingresar = async (e) => {
     e.preventDefault()
-    if (contrasena.length < 8) {
-      setError("Correo o contraseña incorrectos")
-      return
+    setError("")
+    setEnviando(true)
+
+    try {
+      // Al abrirse la sesión, el bloque de abajo lleva al usuario a su destino.
+      await login({
+        email: identificador.trim(),
+        password: contrasena,
+      })
+    } catch (err) {
+      const detalle = err.response?.data?.detail
+      setError(detalle || "No pudimos iniciar sesión. Verifica tus datos e intenta de nuevo.")
+    } finally {
+      setEnviando(false)
     }
-    navigate("/cliente")
   }
 
   const cambiarIdentificador = (e) => {
@@ -31,12 +45,31 @@ export default function IniciarSesion() {
     setError("")
   }
 
+  if (cargando) {
+    return <p className="p-8 text-texto">Cargando…</p>
+  }
+
+  // `/` y las rutas desconocidas llegan aquí: quien ya tiene sesión sigue a su panel.
+  if (usuario) {
+    const desde = location.state?.desde?.pathname
+    const destino = desde && puedeEntrarA(usuario.rol, desde) ? desde : rutaInicio(usuario.rol)
+    return <Navigate to={destino} replace />
+  }
+
   const imagenFondo = fondoVino ?? fondoRojo
+  const mensajes = (
+    <>
+      {location.state?.mensaje && !error && (
+        <MensajeAlerta tipo="info">{location.state.mensaje}</MensajeAlerta>
+      )}
+      {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+    </>
+  )
 
   return (
     <>
       <div className="lg:hidden">
-        <AuthLayout volverA="/login">
+        <AuthLayout volverA="/bienvenida">
           <h1 className="mt-6 text-center font-titulo text-[28px] font-semibold leading-9 text-white">
             ¡Estás de vuelta!
           </h1>
@@ -44,7 +77,8 @@ export default function IniciarSesion() {
           <form onSubmit={ingresar} className="mt-12 flex flex-col gap-6">
             <CampoTexto
               fondo="oscuro"
-              etiqueta="Correo o Teléfono"
+              etiqueta="Correo electrónico"
+              type="email"
               placeholder="Escribe aquí"
               value={identificador}
               onChange={cambiarIdentificador}
@@ -59,15 +93,28 @@ export default function IniciarSesion() {
               onChange={cambiarContrasena}
               required
             />
-            {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
-            <Boton type="submit" tipo="ambar" className="min-w-[200px] self-center">
-              Iniciar Sesión
+            {mensajes}
+            <Boton
+              type="submit"
+              tipo="ambar"
+              className="min-w-[200px] self-center"
+              disabled={enviando}
+            >
+              {enviando ? "Ingresando…" : "Iniciar Sesión"}
             </Boton>
           </form>
 
-          <Link to="/recuperar-contrasena" className="mt-auto pt-8 text-center text-sm text-white underline">
-            Olvidé mi contraseña
-          </Link>
+          <div className="mt-auto flex flex-col gap-3 pt-8 text-center text-sm text-white">
+            <Link to="/recuperar-contrasena" className="underline">
+              Olvidé mi contraseña
+            </Link>
+            <Link to="/registro" className="underline">
+              Crear una cuenta
+            </Link>
+            <Link to="/registro-administrador" className="font-semibold underline">
+              ¿Tienes un negocio? Regístrate como Administrador aquí
+            </Link>
+          </div>
         </AuthLayout>
       </div>
 
@@ -111,10 +158,10 @@ export default function IniciarSesion() {
               required
             />
 
-            {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+            {mensajes}
 
-            <Boton type="submit" anchoCompleto className="mt-2">
-              Iniciar sesión
+            <Boton type="submit" anchoCompleto className="mt-2" disabled={enviando}>
+              {enviando ? "Ingresando…" : "Iniciar sesión"}
             </Boton>
 
             <div className="flex flex-col items-center gap-4">
@@ -123,6 +170,9 @@ export default function IniciarSesion() {
               </Link>
               <Link to="/registro" className="font-titulo font-medium text-texto">
                 Crear una cuenta
+              </Link>
+              <Link to="/registro-administrador" className="text-center font-titulo font-medium text-texto">
+                ¿Tienes un negocio? Regístrate como Administrador aquí
               </Link>
             </div>
           </form>

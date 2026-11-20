@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # Apps del proyecto
     "apps.core",
+    "apps.negocios",
     "apps.usuarios",
     "apps.sedes",
     "apps.menu",
@@ -122,7 +123,21 @@ USE_TZ = True
 # --- Archivos estáticos ------------------------------------------------------
 STATIC_URL = "static/"
 
+# --- Recuperación de contraseña ----------------------------------------------
+# Vida del token de recuperación, en segundos (30 minutos).
+PASSWORD_RESET_TIMEOUT = 1800
+
+# --- Cuentas -----------------------------------------------------------------
+# URL del frontend: se usa para armar los enlaces que se envían por correo.
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173").rstrip("/")
+# Bloqueo temporal tras intentos fallidos de inicio de sesión (HU-1.2).
+LOGIN_MAX_INTENTOS = 5
+LOGIN_BLOQUEO_MINUTOS = 15
+# Vigencia del enlace de activación del personal nuevo (HU-1.4).
+ACTIVACION_CUENTA_HORAS = 24
+
 # --- Correo ------------------------------------------------------------------
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="DomiPedidosX <no-responder@domipedidosx.local>")
 MAILERS = {
     "default": {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",

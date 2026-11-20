@@ -1,13 +1,22 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
 
-from apps.core.permissions import EsAdmin
-from .models import Direccion
+from apps.core.permissions import (
+    EsAdmin,
+    EsCliente,
+    EsCocina,
+    EsOperador,
+    EsRepartidor,
+    exigir_negocio,
+)
+from .models import Direccion, Rol
 from .serializers import (
     RegistroClienteSerializer,
     LoginSerializer,
@@ -17,15 +26,29 @@ from .serializers import (
     SolicitarPasswordResetSerializer,
     ConfirmarPasswordResetSerializer,
     ActualizarPerfilSerializer,
+    ClienteBusquedaSerializer,
+    RegistroNegocioSerializer,
     DireccionSerializer,
     RolSerializer,
+    ActivarCuentaSerializer,
+    DesactivarCuentaSerializer,
+    RegistroRapidoClienteSerializer,
 )
 from .services import (
     registrar_cliente,
+    registrar_negocio,
     crear_usuario_personal,
     solicitar_recuperacion_password,
     confirmar_recuperacion_password,
     actualizar_perfil_usuario,
+    desactivar_direccion,
+    guardar_direccion,
+    activacion_pendiente,
+    activar_cuenta,
+    desactivar_cuenta_cliente,
+    enviar_enlace_activacion,
+    obtener_token_activacion,
+    registrar_cliente_rapido,
 )
 
 User = get_user_model()
@@ -50,6 +73,33 @@ class RegistroClienteView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+class RegistroNegocioView(APIView):
+    """Registro público: crea un negocio y a su administrador.
+
+    Ese administrador solo gestiona su propio negocio. Al igual que el registro
+    de clientes, no devuelve tokens: la sesión se abre con el login.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = RegistroNegocioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        usuario = registrar_negocio(**serializer.validated_data)
+        return Response(
+            {
+                "mensaje": "Negocio registrado exitosamente",
+                "id": str(usuario.id),
+                "email": usuario.email,
+                "negocio": {
+                    "id": str(usuario.negocio_id),
+                    "nombre": usuario.negocio.nombre,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -80,13 +130,105 @@ class RegistroPersonalView(APIView):
         serializer.is_valid(raise_exception=True)
         datos = serializer.validated_data
         sedes_ids = datos.pop("sedes_ids", [])
-        usuario = crear_usuario_personal(**datos, sedes_ids=sedes_ids)
+        try:
+            usuario = crear_usuario_personal(
+                negocio=exigir_negocio(request.user), **datos, sedes_ids=sedes_ids
+            )
+        except ValueError as exc:
+            return Response(
+                {"sedes_ids": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(
             {
-                "mensaje": "Usuario de personal registrado exitosamente",
+                "mensaje": (
+                    "Usuario de personal registrado. Le enviamos un enlace "
+                    "a su correo para que defina su contraseña (vence en 24 horas)."
+                ),
                 "usuario": PersonalSerializer(usuario).data,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class ActivarCuentaView(APIView):
+    """El empleado define su contraseña con el enlace que recibió por correo."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request, token):
+        # Permite a la pantalla saludar al empleado o avisar que el enlace venció.
+        try:
+            registro = obtener_token_activacion(token)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        usuario = registro.usuario
+        return Response(
+            {
+                "nombre": usuario.nombre,
+                "email": usuario.email,
+                "rol": usuario.rol,
+                "expira_en": registro.expira_en,
+            }
+        )
+
+    def post(self, request, token=None):
+        datos = dict(request.data.items())
+        if token:
+            datos["token"] = token
+        serializer = ActivarCuentaSerializer(data=datos)
+        serializer.is_valid(raise_exception=True)
+        try:
+            activar_cuenta(**serializer.validated_data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except DjangoValidationError as exc:
+            return Response(
+                {"password": list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(
+            {"mensaje": "Cuenta activada. Ya puedes iniciar sesión."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ReenviarActivacionView(APIView):
+    """El admin reenvía el enlace a un empleado que aún no activó su cuenta."""
+
+    permission_classes = [EsAdmin]
+
+    def post(self, request, pk):
+        usuario = _usuario_gestionable(request, pk)
+        if not usuario.is_active or not activacion_pendiente(usuario):
+            return Response(
+                {"detail": "Esta cuenta ya está activada o está desactivada."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        enviar_enlace_activacion(usuario)
+        return Response({"mensaje": "Enlace de activación reenviado."})
+
+
+class DesactivarMiCuentaView(APIView):
+    """El cliente desactiva su propia cuenta (HU-1.10)."""
+
+    permission_classes = [EsCliente]
+
+    def patch(self, request):
+        serializer = DesactivarCuentaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not request.user.check_password(serializer.validated_data["password"]):
+            return Response(
+                {"password": ["La contraseña no es correcta."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        desactivar_cuenta_cliente(request.user)
+        return Response(
+            {
+                "mensaje": (
+                    "Tu cuenta fue desactivada. Tus pedidos en curso se "
+                    "entregarán normalmente."
+                )
+            }
         )
 
 class SolicitarPasswordResetView(APIView):
@@ -130,24 +272,57 @@ class ConfirmarPasswordResetView(APIView):
 # TUS VISTAS (HU 1.6, 1.9 y 1.10)
 # ==========================================
 
+def _usuario_gestionable(request, pk):
+    """Personal del negocio del admin, sin incluirse a sí mismo.
+
+    Un admin no puede quitarse el acceso: su negocio podría quedar sin responsable.
+    """
+    negocio = exigir_negocio(request.user)
+    usuario = get_object_or_404(User, pk=pk, negocio=negocio)
+    if usuario.pk == request.user.pk:
+        raise ValidationError(
+            {"detail": "No puedes cambiar el rol ni desactivar tu propia cuenta."}
+        )
+    return usuario
+
+
 class DesactivarUsuarioView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [EsAdmin]
 
     def patch(self, request, pk):
-        usuario = get_object_or_404(User, pk=pk)
+        usuario = _usuario_gestionable(request, pk)
         usuario.is_active = False
         usuario.save()
         return Response({"mensaje": "Cuenta desactivada exitosamente"}, status=status.HTTP_200_OK)
 
+class UsuarioListAdminView(APIView):
+    permission_classes = [EsAdmin]
+
+    def get(self, request):
+        usuarios = (
+            User.objects.filter(
+                is_active=True, negocio=exigir_negocio(request.user)
+            )
+            .prefetch_related("sedes_asignadas__sede")
+            .order_by("nombre", "apellido")
+        )
+        serializer = PersonalSerializer(usuarios, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 class CambiarRolView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [EsAdmin]
 
     def patch(self, request, pk):
-        usuario = get_object_or_404(User, pk=pk)
+        usuario = _usuario_gestionable(request, pk)
         serializer = RolSerializer(data=request.data)
         if serializer.is_valid():
             usuario.rol = serializer.validated_data['rol']
-            usuario.save()
+            usuario.is_staff = usuario.rol == Rol.ADMIN
+            # Un cliente no pertenece a ningún negocio ni trabaja en sus sedes.
+            if usuario.rol == Rol.CLIENTE:
+                usuario.negocio = None
+                usuario.sedes_asignadas.all().delete()
+            usuario.save(update_fields=["rol", "is_staff", "negocio"])
             return Response({"mensaje": f"Rol actualizado a {usuario.rol}"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -164,8 +339,113 @@ class DireccionListCreateView(APIView):
             return Response({"error": "Máximo 5 direcciones permitidas"}, status=status.HTTP_400_BAD_REQUEST)
         
         serializer = DireccionSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(cliente=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+        serializer.is_valid(raise_exception=True)
+        direccion = guardar_direccion(request.user, **serializer.validated_data)
+        return Response(
+            DireccionSerializer(direccion).data, status=status.HTTP_201_CREATED
+        )
+
+
+class DireccionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _obtener(self, request, pk):
+        return get_object_or_404(
+            Direccion, pk=pk, cliente=request.user, activa=True
+        )
+
+    def patch(self, request, pk):
+        direccion = self._obtener(request, pk)
+        serializer = DireccionSerializer(
+            direccion, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        direccion = guardar_direccion(
+            request.user, direccion=direccion, **serializer.validated_data
+        )
+        return Response(DireccionSerializer(direccion).data)
+
+    def delete(self, request, pk):
+        desactivar_direccion(self._obtener(request, pk))
+        return Response({"mensaje": "Dirección eliminada correctamente."})
+
+
+class ClienteBusquedaView(APIView):
+    """GET: busca clientes activos. POST: registro rápido (HU-5.9).
+
+    Busca clientes activos para registrar pedidos a su nombre.
+
+    Los clientes no pertenecen a un negocio, así que solo se listan los que ya le
+    han comprado. A uno nuevo se le encuentra con su correo o teléfono exactos,
+    los datos que da al hacer el pedido; así no se expone toda la base de clientes.
+    """
+
+    permission_classes = [EsOperador | EsAdmin]
+    LIMITE_RESULTADOS = 20
+
+    def get(self, request):
+        negocio = exigir_negocio(request.user)
+        busqueda = request.query_params.get("q", "").strip()
+
+        condicion = Q(pedidos__sede__negocio=negocio)
+        for termino in busqueda.split():
+            condicion &= (
+                Q(nombre__icontains=termino)
+                | Q(apellido__icontains=termino)
+                | Q(email__icontains=termino)
+                | Q(telefono__icontains=termino)
+            )
+        if busqueda:
+            condicion |= Q(email__iexact=busqueda) | Q(telefono=busqueda)
+
+        clientes = (
+            User.objects.filter(condicion, rol=Rol.CLIENTE, is_active=True)
+            .distinct()
+            .prefetch_related(
+                Prefetch(
+                    "direcciones",
+                    queryset=Direccion.objects.filter(activa=True),
+                    to_attr="direcciones_activas",
+                )
+            )
+            .order_by("nombre", "apellido")[: self.LIMITE_RESULTADOS]
+        )
+        return Response(ClienteBusquedaSerializer(clientes, many=True).data)
+
+    def post(self, request):
+        exigir_negocio(request.user)
+        serializer = RegistroRapidoClienteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            cliente = registrar_cliente_rapido(**serializer.validated_data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        cliente.direcciones_activas = []
+        return Response(
+            ClienteBusquedaSerializer(cliente).data, status=status.HTTP_201_CREATED
+        )
+
+
+# ==========================================
+# MÓDULOS POR ROL (provisionales, sin datos reales todavía)
+# ==========================================
+
+class ModuloSedeView(APIView):
+    permission_classes = [EsOperador]
+
+    def get(self, request):
+        return Response({"modulo": "gestion de sede"})
+
+
+class ModuloCocinaView(APIView):
+    permission_classes = [EsCocina]
+
+    def get(self, request):
+        return Response({"modulo": "tablero de cocina"})
+
+
+class ModuloRepartidorView(APIView):
+    permission_classes = [EsRepartidor]
+
+    def get(self, request):
+        return Response({"modulo": "pedidos asignados"})

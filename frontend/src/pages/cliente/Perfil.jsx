@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
 import ClienteLayout from "../../layouts/ClienteLayout"
 import Boton from "../../components/Boton"
 import CampoTexto from "../../components/CampoTexto"
+import MensajeAlerta from "../../components/MensajeAlerta"
 import ModalConfirmacion from "../../components/ModalConfirmacion"
 import { Candado } from "../../components/Iconos"
 import { fondoPerfil, iconoBolsaNaranja } from "../../assets"
+import { desactivarMiCuenta } from "../../api/auth"
+import { useAuth } from "../../context/auth-context"
+import { mensajeDeError } from "../../utils/errores"
 
 const FONDO = {
   backgroundImage: `${fondoPerfil ? `url(${fondoPerfil}), ` : ""}linear-gradient(to bottom, #ffffff, #fce3c8)`,
@@ -15,13 +18,18 @@ const FONDO = {
 }
 
 export default function Perfil() {
-  const navigate = useNavigate()
+  const { usuario, actualizarPerfil, logout } = useAuth()
   const entradaFoto = useRef(null)
   const [foto, setFoto] = useState(null)
-  const [nombre, setNombre] = useState("Juan")
-  const [apellido, setApellido] = useState("Pérez")
-  const [telefono, setTelefono] = useState("300 123 4567")
+  const [nombre, setNombre] = useState(usuario?.nombre ?? "")
+  const [apellido, setApellido] = useState(usuario?.apellido ?? "")
+  const [telefono, setTelefono] = useState(usuario?.telefono ?? "")
   const [eliminando, setEliminando] = useState(false)
+  const [claveDesactivar, setClaveDesactivar] = useState("")
+  const [errorDesactivar, setErrorDesactivar] = useState("")
+  const [desactivando, setDesactivando] = useState(false)
+  const [mensaje, setMensaje] = useState(null)
+  const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
     return () => {
@@ -34,8 +42,42 @@ export default function Perfil() {
     setFoto(URL.createObjectURL(archivo))
   }
 
-  const guardar = (e) => {
+  const guardar = async (e) => {
     e.preventDefault()
+    setMensaje(null)
+    setGuardando(true)
+    try {
+      await actualizarPerfil({ nombre, apellido, telefono })
+      setMensaje({ tipo: "exito", texto: "Datos actualizados correctamente" })
+    } catch {
+      setMensaje({ tipo: "error", texto: "No pudimos guardar los cambios. Intenta de nuevo." })
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  const cerrarDesactivar = () => {
+    if (desactivando) return
+    setEliminando(false)
+    setClaveDesactivar("")
+    setErrorDesactivar("")
+  }
+
+  const desactivar = async () => {
+    if (desactivando) return
+    if (!claveDesactivar) {
+      setErrorDesactivar("Escribe tu contraseña para confirmar")
+      return
+    }
+    setDesactivando(true)
+    setErrorDesactivar("")
+    try {
+      await desactivarMiCuenta(claveDesactivar)
+      logout()
+    } catch (err) {
+      setErrorDesactivar(mensajeDeError(err, "No pudimos desactivar tu cuenta."))
+      setDesactivando(false)
+    }
   }
 
   return (
@@ -85,7 +127,12 @@ export default function Perfil() {
           required
         />
         <div className="relative">
-          <CampoTexto etiqueta="Correo electrónico*" defaultValue="juan123@gmail.com" disabled />
+          <CampoTexto
+            etiqueta="Correo electrónico*"
+            value={usuario?.email ?? ""}
+            disabled
+            readOnly
+          />
           <Candado className="absolute bottom-[14px] right-4 h-5 w-5 text-texto-sec" />
         </div>
         <CampoTexto
@@ -96,13 +143,14 @@ export default function Perfil() {
           onChange={(e) => setTelefono(e.target.value)}
           required
         />
-        <Boton type="submit" tipo="ambar" className="w-[249px] self-center">
-          Guardar cambios
+        {mensaje && <MensajeAlerta tipo={mensaje.tipo}>{mensaje.texto}</MensajeAlerta>}
+        <Boton type="submit" tipo="ambar" className="w-[249px] self-center" disabled={guardando}>
+          {guardando ? "Guardando…" : "Guardar cambios"}
         </Boton>
       </form>
 
       <div className="flex flex-col items-center gap-4 pb-4">
-        <Boton tipo="secundario" onClick={() => navigate("/login")}>
+        <Boton tipo="secundario" onClick={logout}>
           Cerrar sesión
         </Boton>
         <button
@@ -110,19 +158,28 @@ export default function Perfil() {
           onClick={() => setEliminando(true)}
           className="text-base font-semibold text-primario hover:underline"
         >
-          Eliminar cuenta
+          Desactivar cuenta
         </button>
       </div>
 
 
       <ModalConfirmacion
         abierto={eliminando}
-        titulo="¿Eliminar cuenta?"
-        texto="Se eliminarán tus datos personales y tus direcciones guardadas. Esta acción no se puede deshacer."
-        textoConfirmar="Eliminar cuenta"
-        onConfirmar={() => setEliminando(false)}
-        onCancelar={() => setEliminando(false)}
-      />
+        titulo="¿Desactivar tu cuenta?"
+        texto="No podrás volver a iniciar sesión. Tus pedidos en curso se entregarán normalmente y tu historial se conserva."
+        textoConfirmar={desactivando ? "Desactivando…" : "Desactivar cuenta"}
+        onConfirmar={desactivar}
+        onCancelar={cerrarDesactivar}
+      >
+        <CampoTexto
+          etiqueta="Confirma con tu contraseña"
+          type="password"
+          value={claveDesactivar}
+          error={errorDesactivar}
+          onChange={(e) => setClaveDesactivar(e.target.value)}
+          autoComplete="current-password"
+        />
+      </ModalConfirmacion>
     </ClienteLayout>
   )
 }

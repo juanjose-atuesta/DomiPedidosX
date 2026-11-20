@@ -1,11 +1,19 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import AdminLayout from "../../layouts/AdminLayout"
 import Boton from "../../components/Boton"
 import CampoTexto from "../../components/CampoTexto"
 import CampoSelect from "../../components/CampoSelect"
+import MensajeAlerta from "../../components/MensajeAlerta"
 import TarjetaProducto from "../../components/TarjetaProducto"
-import { CATEGORIAS, PRODUCTOS } from "../../data/productos"
+import {
+  configurarGrupoOpciones,
+  crearProducto,
+  listarCategorias,
+  obtenerProducto,
+  reemplazarProducto,
+} from "../../api/menu"
+import { mensajeDeError } from "../../utils/errores"
 
 function BloqueOpciones({ titulo, ejemplo, conPrecio = false, items, onCambiar }) {
   const [nombre, setNombre] = useState("")
@@ -82,38 +90,92 @@ function BloqueOpciones({ titulo, ejemplo, conPrecio = false, items, onCambiar }
   )
 }
 
-export default function FormularioProducto() {
-  const navigate = useNavigate()
-  const { id } = useParams()
-  const producto = id ? PRODUCTOS.find((p) => p.id === Number(id)) : null
+// Grupos de opciones que maneja el formulario: el nombre se usa si el producto aún no tiene grupo.
+const GRUPOS = [
+  { tipo: "tamano", nombre: "Tamaños", obligatorio: true },
+  { tipo: "adicion", nombre: "Adiciones", obligatorio: false },
+  { tipo: "excluible", nombre: "Ingredientes excluibles", obligatorio: false },
+]
 
+function opcionesDeTipo(producto, tipo) {
+  return (producto?.grupos_opcion ?? [])
+    .filter((grupo) => grupo.tipo === tipo)
+    .flatMap((grupo) => grupo.opciones)
+    .map((opcion) => ({ nombre: opcion.nombre, extra: Number(opcion.precio_adicional) }))
+}
+
+function Formulario({ id, producto, categorias }) {
+  const navigate = useNavigate()
   const [nombre, setNombre] = useState(producto?.nombre ?? "")
-  const [precio, setPrecio] = useState(producto?.precio ?? "")
-  const [tiempo, setTiempo] = useState(producto?.tiempo ?? "")
+  const [categoriaId, setCategoriaId] = useState(producto?.categoria_id ?? "")
+  const [precio, setPrecio] = useState(producto ? Number(producto.precio_base) : "")
+  const [tiempo, setTiempo] = useState(producto?.tiempo_preparacion_min ?? "")
   const [descripcion, setDescripcion] = useState(producto?.descripcion ?? "")
-  const [tamanos, setTamanos] = useState(producto?.tamanos ?? [])
-  const [adiciones, setAdiciones] = useState(producto?.adiciones ?? [])
-  const [excluibles, setExcluibles] = useState(producto?.excluibles ?? [])
-  const [imagenUrl, setImagenUrl] = useState(null)
-  const [imagenNombre, setImagenNombre] = useState("")
+  const [tamanos, setTamanos] = useState(opcionesDeTipo(producto, "tamano"))
+  const [adiciones, setAdiciones] = useState(opcionesDeTipo(producto, "adicion"))
+  const [excluibles, setExcluibles] = useState(opcionesDeTipo(producto, "excluible"))
+  const [imagenUrl, setImagenUrl] = useState(producto?.imagen_url ?? "")
+  const [error, setError] = useState("")
+  const [guardando, setGuardando] = useState(false)
+  // Si las opciones fallan tras crear el producto, reintentar lo actualiza en vez de duplicarlo.
+  const idGuardado = useRef(id ?? null)
 
   const volver = () => navigate("/operador/productos")
 
-  useEffect(() => {
-    return () => {
-      if (imagenUrl) URL.revokeObjectURL(imagenUrl)
-    }
-  }, [imagenUrl])
+  const precioInvalido = precio !== "" && !(Number(precio) > 0)
 
-  const elegirImagen = (archivo) => {
-    if (!archivo || !archivo.type.startsWith("image/")) return
-    setImagenUrl(URL.createObjectURL(archivo))
-    setImagenNombre(archivo.name)
+  const guardarOpciones = async (productoId) => {
+    const itemsPorTipo = { tamano: tamanos, adicion: adiciones, excluible: excluibles }
+
+    for (const { tipo, nombre: nombreGrupo, obligatorio } of GRUPOS) {
+      const items = itemsPorTipo[tipo]
+      const existente = producto?.grupos_opcion?.find((grupo) => grupo.tipo === tipo)
+      if (items.length === 0 && !existente) continue
+
+      await configurarGrupoOpciones(productoId, {
+        nombre: existente?.nombre ?? nombreGrupo,
+        tipo,
+        obligatorio: obligatorio && items.length > 0,
+        max_selecciones: tipo === "tamano" ? 1 : Math.max(1, items.length),
+        opciones: items.map((item, orden) => ({
+          nombre: item.nombre,
+          precio_adicional: item.extra,
+          orden,
+        })),
+      })
+    }
   }
 
-  const guardar = (e) => {
+  const guardar = async (e) => {
     e.preventDefault()
-    volver()
+    if (precioInvalido || guardando) return
+
+    setGuardando(true)
+    setError("")
+    const datos = {
+      categoria_id: categoriaId || null,
+      nombre: nombre.trim(),
+      descripcion: descripcion.trim(),
+      precio_base: precio,
+      imagen_url: imagenUrl.trim(),
+      tiempo_preparacion_min: tiempo,
+    }
+
+    try {
+      if (idGuardado.current) {
+        await reemplazarProducto(idGuardado.current, datos)
+      } else {
+        const creado = await crearProducto(datos)
+        idGuardado.current = creado.id
+      }
+      await guardarOpciones(idGuardado.current)
+      navigate("/operador/productos", {
+        state: { mensaje: "Producto guardado correctamente." },
+      })
+    } catch (err) {
+      setError(mensajeDeError(err, "No se pudo guardar el producto."))
+      setGuardando(false)
+    }
   }
 
   return (
@@ -125,6 +187,8 @@ export default function FormularioProducto() {
         </Boton>
       }
     >
+      {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+
       <div className="flex flex-wrap items-start gap-6">
         <form
           onSubmit={guardar}
@@ -140,8 +204,10 @@ export default function FormularioProducto() {
             />
             <CampoSelect
               etiqueta="Categoría"
-              opciones={CATEGORIAS}
-              defaultValue={producto?.categoria}
+              opciones={categorias.map((c) => ({ valor: c.id, etiqueta: c.nombre }))}
+              required={false}
+              value={categoriaId}
+              onChange={(e) => setCategoriaId(e.target.value)}
             />
             <CampoTexto
               etiqueta="Precio"
@@ -150,6 +216,7 @@ export default function FormularioProducto() {
               placeholder="Escribe aquí"
               value={precio}
               onChange={(e) => setPrecio(e.target.value)}
+              error={precioInvalido ? "El precio debe ser mayor que 0" : undefined}
               required
             />
             <CampoTexto
@@ -161,28 +228,13 @@ export default function FormularioProducto() {
               onChange={(e) => setTiempo(e.target.value)}
               required
             />
-
-            <div className="flex flex-col gap-[6px]">
-              <span className="text-sm text-texto">Subir imagen</span>
-              <label
-                htmlFor="imagen-producto"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  elegirImagen(e.dataTransfer.files[0])
-                }}
-                className="flex h-24 w-full cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-deshabilitado bg-borde px-4 text-center text-sm text-texto-sec hover:bg-borde/70"
-              >
-                {imagenNombre || "Arrastra o selecciona una imagen"}
-              </label>
-              <input
-                id="imagen-producto"
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={(e) => elegirImagen(e.target.files[0])}
-              />
-            </div>
+            <CampoTexto
+              etiqueta="URL de la imagen"
+              type="url"
+              placeholder="https://…"
+              value={imagenUrl}
+              onChange={(e) => setImagenUrl(e.target.value)}
+            />
             <CampoTexto
               etiqueta="Descripción"
               placeholder="Escribe aquí"
@@ -218,7 +270,9 @@ export default function FormularioProducto() {
             <Boton tipo="secundario" onClick={volver}>
               Cancelar
             </Boton>
-            <Boton type="submit">Guardar producto</Boton>
+            <Boton type="submit" disabled={guardando}>
+              {guardando ? "Guardando…" : "Guardar producto"}
+            </Boton>
           </div>
         </form>
 
@@ -235,4 +289,36 @@ export default function FormularioProducto() {
       </div>
     </AdminLayout>
   )
+}
+
+export default function FormularioProducto() {
+  const { id } = useParams()
+  const [datos, setDatos] = useState(null)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    let vigente = true
+
+    Promise.all([listarCategorias(), id ? obtenerProducto(id) : null])
+      .then(([categorias, producto]) => {
+        if (vigente) setDatos({ categorias, producto })
+      })
+      .catch((err) => {
+        if (vigente) setError(mensajeDeError(err, "No se pudo cargar el producto."))
+      })
+
+    return () => {
+      vigente = false
+    }
+  }, [id])
+
+  if (!datos) {
+    return (
+      <AdminLayout titulo={id ? "Editar producto" : "Nuevo producto"}>
+        <MensajeAlerta tipo={error ? "error" : "info"}>{error || "Cargando…"}</MensajeAlerta>
+      </AdminLayout>
+    )
+  }
+
+  return <Formulario id={id} producto={datos.producto} categorias={datos.categorias} />
 }

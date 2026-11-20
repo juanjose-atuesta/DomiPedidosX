@@ -17,6 +17,7 @@ erDiagram
     }
     menu_categoria {
         uuid id PK
+        uuid negocio_id FK
     }
     menu_grupoopcion {
         uuid id PK
@@ -29,11 +30,15 @@ erDiagram
     menu_producto {
         uuid id PK
         uuid categoria_id FK
+        uuid negocio_id FK
     }
     menu_productocombo {
         bigint id PK
         uuid combo_id FK
         uuid producto_id FK
+    }
+    negocios_negocio {
+        uuid id PK
     }
     notificaciones_notificacion {
         uuid id PK
@@ -68,6 +73,7 @@ erDiagram
     }
     promociones_promocion {
         uuid id PK
+        uuid negocio_id FK
         uuid sede_id FK
     }
     promociones_promocionproducto {
@@ -77,7 +83,15 @@ erDiagram
     }
     sedes_feriado {
         bigint id PK
+        uuid negocio_id FK
+    }
+    sedes_feriado_sedes {
+        bigint id PK
+        bigint feriado_id FK
         uuid sede_id FK
+    }
+    notificaciones_configuracioncorreos {
+        uuid negocio_id PK, FK
     }
     sedes_horarioatencion {
         bigint id PK
@@ -85,6 +99,7 @@ erDiagram
     }
     sedes_sede {
         uuid id PK
+        uuid negocio_id FK
     }
     sedes_sedeusuario {
         bigint id PK
@@ -98,8 +113,13 @@ erDiagram
     usuarios_perfilrepartidor {
         uuid usuario_id PK, FK
     }
+    usuarios_tokenactivacion {
+        bigint id PK
+        uuid usuario_id FK
+    }
     usuarios_user {
         uuid id PK
+        uuid negocio_id FK
     }
 
     cobertura_zonacobertura |o--o{ pedidos_pedido : "zona_id"
@@ -112,6 +132,11 @@ erDiagram
     menu_producto ||--o{ menu_productocombo : "producto_id"
     menu_producto ||--o{ pedidos_detallepedido : "producto_id"
     menu_producto ||--o{ promociones_promocionproducto : "producto_id"
+    negocios_negocio ||--o{ menu_categoria : "negocio_id"
+    negocios_negocio ||--o{ menu_producto : "negocio_id"
+    negocios_negocio ||--o{ promociones_promocion : "negocio_id"
+    negocios_negocio ||--o{ sedes_sede : "negocio_id"
+    negocios_negocio |o--o{ usuarios_user : "negocio_id"
     pedidos_detallepedido ||--o{ pedidos_detallepedidoopcion : "detalle_id"
     pedidos_pedido |o--o{ notificaciones_notificacion : "pedido_id"
     pedidos_pedido ||--o{ pedidos_detallepedido : "pedido_id"
@@ -124,7 +149,10 @@ erDiagram
     sedes_sede |o--o{ notificaciones_notificacion : "sede_id"
     sedes_sede ||--o{ pedidos_pedido : "sede_id"
     sedes_sede |o--o{ promociones_promocion : "sede_id"
-    sedes_sede |o--o{ sedes_feriado : "sede_id"
+    negocios_negocio ||--o{ sedes_feriado : "negocio_id"
+    sedes_feriado ||--o{ sedes_feriado_sedes : "feriado_id"
+    sedes_sede ||--o{ sedes_feriado_sedes : "sede_id"
+    negocios_negocio ||--o| notificaciones_configuracioncorreos : "negocio_id"
     sedes_sede ||--o{ sedes_horarioatencion : "sede_id"
     sedes_sede ||--o{ sedes_sedeusuario : "sede_id"
     usuarios_direccion |o--o{ pedidos_pedido : "direccion_id"
@@ -136,3 +164,4 @@ erDiagram
     usuarios_user ||--o{ sedes_sedeusuario : "usuario_id"
     usuarios_user ||--o{ usuarios_direccion : "cliente_id"
     usuarios_user ||--o| usuarios_perfilrepartidor : "usuario_id"
+    usuarios_user ||--o{ usuarios_tokenactivacion : "usuario_id"

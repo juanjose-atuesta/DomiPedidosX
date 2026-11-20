@@ -1,7 +1,6 @@
 import re
 from uuid import uuid4
 
-<<<<<<< HEAD
 """Pruebas del login con JWT (criterios de aceptación de la HU)."""
 
 import pytest
@@ -9,6 +8,11 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
+from apps.core.datos_prueba import (
+    habilitar_sede_para_pedidos,
+    negocio_de_rol,
+    negocio_prueba,
+)
 from apps.usuarios.models import Rol, User
 
 CLAVE = "Clave123!"
@@ -17,6 +21,7 @@ CLAVE = "Clave123!"
 def crear_usuario(email, rol, **extra):
     """Crea un usuario con los campos obligatorios del modelo."""
     return User.objects.create_user(
+        negocio=negocio_de_rol(rol),
         email=email, password=CLAVE, rol=rol,
         nombre="Prueba", apellido="Uno", telefono="3000000000", **extra,
     )
@@ -128,17 +133,27 @@ def test_cliente_no_accede_a_modulos_del_personal():
 def test_sin_token_no_accede():
     """Sin sesión iniciada el módulo responde 401 (no autenticado)."""
     assert APIClient().get(reverse("modulo-cocina")).status_code == 401
-=======
+
+
+from datetime import datetime, timedelta
+from decimal import Decimal
+from unittest.mock import patch
+
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
+from apps.inventario.models import InventarioSede
+from apps.menu.models import Producto
+from apps.pedidos.services import crear_pedido
 from apps.sedes.models import Sede, SedeUsuario
 
-from .models import PerfilRepartidor, Rol, User
+from .models import Direccion, PerfilRepartidor, Rol, TokenActivacion, User
 from .serializers import LoginSerializer
 
 PASSWORD = "ClaveSegura#2024"
@@ -189,7 +204,10 @@ class RegistroClienteTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("email", response.data)
+        self.assertEqual(
+            response.data["email"],
+            ["Ya existe un usuario registrado con este correo."],
+        )
 
     def test_contrasenas_no_coinciden(self):
         response = self.client.post(
@@ -383,6 +401,25 @@ class MeTests(APITestCase):
         self.assertEqual(response.data["telefono"], self.usuario.telefono)
         self.assertEqual(response.data["rol"], self.usuario.rol)
 
+    def test_me_incluye_solo_sedes_activas_asignadas(self):
+        activa = Sede.objects.create(negocio=negocio_prueba(), nombre="Activa", direccion="Calle 1")
+        inactiva = Sede.objects.create(
+            negocio=negocio_prueba(),
+            nombre="Inactiva", direccion="Calle 2", activa=False
+        )
+        Sede.objects.create(negocio=negocio_prueba(), nombre="No asignada", direccion="Calle 3")
+        SedeUsuario.objects.create(usuario=self.usuario, sede=activa)
+        SedeUsuario.objects.create(usuario=self.usuario, sede=inactiva)
+
+        response = self.client.get(
+            self.url, HTTP_AUTHORIZATION=f"Bearer {self._obtener_access()}"
+        )
+
+        self.assertEqual(
+            response.data["sedes"],
+            [{"id": str(activa.pk), "nombre": "Activa"}],
+        )
+
     def test_me_con_token_alterado(self):
         access = self._obtener_access()
         alterado = access[:-1] + ("a" if access[-1] != "a" else "b")
@@ -394,10 +431,131 @@ class MeTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class GestionUsuariosAdminTests(APITestCase):
+    def setUp(self):
+        # Rol admin sin is_staff: el permiso debe decidir por rol, no por staff.
+        self.admin = self._crear("admin.gestion@example.com", Rol.ADMIN)
+        self.operador = self._crear("operador.gestion@example.com", Rol.OPERADOR)
+        self.cliente = self._crear("cliente.gestion@example.com", Rol.CLIENTE)
+        self.cocina = self._crear("cocina.gestion@example.com", Rol.COCINA)
+
+    def _crear(self, email, rol, **extra):
+        return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
+            email=email,
+            password=PASSWORD,
+            nombre="Prueba",
+            apellido="Gestion",
+            telefono="3000000000",
+            rol=rol,
+            **extra,
+        )
+
+    def _auth(self, usuario):
+        token = LoginSerializer.get_token(usuario).access_token
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _cambiar_rol(self, usuario, rol, actor=None):
+        return self.client.patch(
+            reverse("cambiar-rol", args=[usuario.pk]),
+            {"rol": rol},
+            format="json",
+            **self._auth(actor or self.admin),
+        )
+
+    def test_cambiar_rol_sincroniza_is_staff(self):
+        response = self._cambiar_rol(self.cocina, Rol.ADMIN)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.ADMIN)
+        self.assertTrue(self.cocina.is_staff)
+
+        response = self._cambiar_rol(self.cocina, Rol.OPERADOR)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.OPERADOR)
+        self.assertFalse(self.cocina.is_staff)
+
+    def test_pasar_a_cliente_lo_saca_del_negocio(self):
+        sede = Sede.objects.create(
+            negocio=self.cocina.negocio, nombre="Norte", direccion="Calle 1"
+        )
+        SedeUsuario.objects.create(usuario=self.cocina, sede=sede)
+
+        response = self._cambiar_rol(self.cocina, Rol.CLIENTE)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cocina.refresh_from_db()
+        self.assertIsNone(self.cocina.negocio)
+        self.assertFalse(self.cocina.sedes_asignadas.exists())
+
+    def test_admin_no_se_quita_el_acceso_a_si_mismo(self):
+        response_rol = self._cambiar_rol(self.admin, Rol.CLIENTE)
+        response_desactivar = self.client.patch(
+            reverse("desactivar-usuario", args=[self.admin.pk]),
+            **self._auth(self.admin),
+        )
+
+        self.assertEqual(response_rol.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response_desactivar.status_code, status.HTTP_400_BAD_REQUEST
+        )
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.rol, Rol.ADMIN)
+        self.assertTrue(self.admin.is_active)
+
+    def test_cambiar_rol_invalido_da_400(self):
+        response = self._cambiar_rol(self.cocina, "gerente")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.COCINA)
+
+    def test_staff_sin_rol_admin_no_cambia_roles_ni_desactiva(self):
+        staff = self._crear(
+            "staff.gestion@example.com", Rol.OPERADOR, is_staff=True
+        )
+
+        response_rol = self._cambiar_rol(self.cocina, Rol.ADMIN, actor=staff)
+        response_desactivar = self.client.patch(
+            reverse("desactivar-usuario", args=[self.cocina.pk]),
+            **self._auth(staff),
+        )
+
+        self.assertEqual(response_rol.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            response_desactivar.status_code, status.HTTP_403_FORBIDDEN
+        )
+        self.cocina.refresh_from_db()
+        self.assertEqual(self.cocina.rol, Rol.COCINA)
+        self.assertTrue(self.cocina.is_active)
+
+    def test_admin_desactiva_personal_de_su_negocio(self):
+        response = self.client.patch(
+            reverse("desactivar-usuario", args=[self.cocina.pk]),
+            **self._auth(self.admin),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cocina.refresh_from_db()
+        self.assertFalse(self.cocina.is_active)
+
+    def test_admin_no_gestiona_a_un_cliente(self):
+        response = self.client.patch(
+            reverse("desactivar-usuario", args=[self.cliente.pk]),
+            **self._auth(self.admin),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.cliente.refresh_from_db()
+        self.assertTrue(self.cliente.is_active)
+
+
 class RegistroPersonalTests(APITestCase):
     def setUp(self):
         self.url = reverse("registro_personal")
         self.admin = User.objects.create_user(
+            negocio=negocio_de_rol(Rol.ADMIN),
             email="admin@example.com",
             password=PASSWORD,
             nombre="Admin",
@@ -407,12 +565,15 @@ class RegistroPersonalTests(APITestCase):
             is_staff=True,
         )
         self.sede1 = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Norte", direccion="Calle 1"
         )
         self.sede2 = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Sur", direccion="Calle 2"
         )
         self.sede_inactiva = Sede.objects.create(
+            negocio=negocio_prueba(),
             nombre="Sede Cerrada", direccion="Calle 3", activa=False
         )
 
@@ -483,7 +644,7 @@ class RegistroPersonalTests(APITestCase):
 
         usuario = User.objects.get(email="repartidor.perfil@example.com")
         perfil = PerfilRepartidor.objects.get(usuario=usuario)
-        self.assertFalse(perfil.disponible)
+        self.assertTrue(perfil.disponible)  # libre para recibir pedidos
 
     def test_admin_crea_otro_admin_sin_sedes(self):
         response = self._post(
@@ -571,6 +732,7 @@ class RegistroPersonalTests(APITestCase):
 
     def test_email_duplicado_sin_distinguir_mayusculas(self):
         User.objects.create_user(
+            negocio=negocio_de_rol(Rol.COCINA),
             email="personal.dup@example.com",
             password=PASSWORD,
             nombre="Existente",
@@ -679,6 +841,22 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_token_expira_a_los_30_minutos(self):
+        self._solicitar()
+        uidb64, token = self._extraer_credenciales(mail.outbox[0].body)
+
+        for minutos, esperado in (
+            (31, status.HTTP_400_BAD_REQUEST),
+            (29, status.HTTP_200_OK),
+        ):
+            with self.subTest(minutos=minutos), patch.object(
+                PasswordResetTokenGenerator,
+                "_now",
+                return_value=datetime.now() + timedelta(minutes=minutos),
+            ):
+                response = self._confirmar(uidb64, token, "NuevaClave#2026")
+                self.assertEqual(response.status_code, esperado)
+
     def test_confirmacion_con_contrasena_debil_da_400(self):
         self._solicitar()
         uidb64, token = self._extraer_credenciales(mail.outbox[0].body)
@@ -774,4 +952,559 @@ class ActualizarPerfilTests(APITestCase):
         response = self._patch({"telefono": "3000000000"})
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
->>>>>>> develop
+
+
+class DireccionesTests(APITestCase):
+    def setUp(self):
+        self.cliente = User.objects.create_user(
+            email="dir@example.com", password=PASSWORD, nombre="Ana",
+            apellido="Dir", telefono="3000000000",
+        )
+        self.otro = User.objects.create_user(
+            email="otro.dir@example.com", password=PASSWORD, nombre="Otro",
+            apellido="Dir", telefono="3000000001",
+        )
+        self.url = reverse("direcciones")
+
+    def _auth(self, usuario=None):
+        token = LoginSerializer.get_token(usuario or self.cliente).access_token
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _crear(self, **extra):
+        response = self.client.post(
+            self.url,
+            {
+                "alias": "Casa",
+                "direccion_texto": "Calle 5",
+                "latitud": "3.451600",
+                "longitud": "-76.532000",
+                **extra,
+            },
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return response.data
+
+    def _detalle(self, direccion):
+        return reverse("direccion_detail", args=[direccion["id"]])
+
+    def test_segunda_principal_reemplaza_a_la_anterior(self):
+        primera = self._crear(es_principal=True)
+        segunda = self._crear(es_principal=True)
+
+        response = self.client.get(self.url, **self._auth())
+        principales = [d["id"] for d in response.data if d["es_principal"]]
+
+        self.assertEqual(primera["es_principal"], True)
+        self.assertEqual(principales, [segunda["id"]])
+
+    def test_editar_direccion(self):
+        direccion = self._crear()
+        response = self.client.patch(
+            self._detalle(direccion),
+            {"alias": "Trabajo", "es_principal": True},
+            format="json",
+            **self._auth(),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["alias"], "Trabajo")
+        self.assertTrue(response.data["es_principal"])
+
+    def test_eliminar_es_logico_y_libera_el_cupo_de_principal(self):
+        direccion = self._crear(es_principal=True)
+
+        response = self.client.delete(self._detalle(direccion), **self._auth())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get(self.url, **self._auth()).data, [])
+        self.assertTrue(Direccion.objects.filter(pk=direccion["id"]).exists())
+        self._crear(es_principal=True)
+
+    def test_no_se_toca_la_direccion_de_otro_usuario(self):
+        direccion = self._crear()
+
+        for metodo in (self.client.patch, self.client.delete):
+            response = metodo(
+                self._detalle(direccion),
+                {"alias": "Robada"},
+                format="json",
+                **self._auth(self.otro),
+            )
+            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ClienteBusquedaTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("clientes_busqueda")
+        self.ana = self._crear("ana@example.com", "Ana", "Gomez", Rol.CLIENTE)
+        self._crear("beto@example.com", "Beto", "Ruiz", Rol.CLIENTE)
+        self._crear("off@example.com", "Ana", "Inactiva", Rol.CLIENTE, is_active=False)
+        self.operador = self._crear("op@example.com", "Ana", "Operadora", Rol.OPERADOR)
+        self.cocina = self._crear("co@example.com", "Coci", "Na", Rol.COCINA)
+
+    def _crear(self, email, nombre, apellido, rol, **extra):
+        return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
+            email=email, password=PASSWORD, nombre=nombre, apellido=apellido,
+            telefono="3001112233", rol=rol, **extra,
+        )
+
+    def _auth(self, usuario):
+        token = LoginSerializer.get_token(usuario).access_token
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def _comprar(self, cliente):
+        """El cliente hace un pedido en el negocio del operador."""
+        sede = Sede.objects.create(
+            negocio=self.operador.negocio, nombre="Norte", direccion="Calle 1"
+        )
+        habilitar_sede_para_pedidos(sede)
+        producto = Producto.objects.create(
+            negocio=self.operador.negocio,
+            nombre="Papas",
+            precio_base=Decimal("1000.00"),
+            tiempo_preparacion_min=5,
+        )
+        InventarioSede.objects.create(sede=sede, producto=producto, controla_stock=False)
+        crear_pedido(
+            sede=sede, cliente=cliente, detalles=[{"producto": producto, "cantidad": 1}]
+        )
+
+    def _buscar(self, q=None):
+        parametros = {"q": q} if q else {}
+        return self.client.get(self.url, parametros, **self._auth(self.operador))
+
+    def test_sin_compras_no_se_lista_por_nombre(self):
+        self.assertEqual(self._buscar().data, [])
+        self.assertEqual(self._buscar("ana").data, [])
+
+    def test_cliente_nuevo_se_encuentra_con_datos_exactos(self):
+        for q in ("ana@example.com", "ANA@example.com"):
+            with self.subTest(q=q):
+                response = self._buscar(q)
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(
+                    [c["id"] for c in response.data], [str(self.ana.pk)]
+                )
+
+    def test_cliente_con_compras_se_busca_por_nombre_y_apellido(self):
+        self._comprar(self.ana)
+
+        for q in (None, "ana", "ana gomez"):
+            with self.subTest(q=q):
+                self.assertEqual(
+                    [c["id"] for c in self._buscar(q).data], [str(self.ana.pk)]
+                )
+
+    def test_no_devuelve_clientes_inactivos(self):
+        self.assertEqual(self._buscar("off@example.com").data, [])
+
+    def test_incluye_solo_direcciones_activas(self):
+        Direccion.objects.create(
+            cliente=self.ana, alias="Casa", direccion_texto="Calle 1",
+            latitud="3.45", longitud="-76.53",
+        )
+        Direccion.objects.create(
+            cliente=self.ana, alias="Vieja", direccion_texto="Calle 2",
+            latitud="3.45", longitud="-76.53", activa=False,
+        )
+
+        response = self._buscar("ana@example.com")
+
+        self.assertEqual(
+            [d["alias"] for d in response.data[0]["direcciones"]], ["Casa"]
+        )
+
+    def test_otros_roles_no_acceden(self):
+        for usuario in (self.ana, self.cocina):
+            response = self.client.get(self.url, **self._auth(usuario))
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.assertEqual(
+            self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+
+class BloqueoLoginTests(APITestCase):
+    """HU-1.2: 5 intentos fallidos consecutivos bloquean la cuenta 15 minutos."""
+
+    def setUp(self):
+        self.url = reverse("login")
+        self.usuario = User.objects.create_user(
+            email="bloqueo@example.com",
+            password=PASSWORD,
+            nombre="Ana",
+            apellido="Bloqueo",
+            telefono="3000000000",
+        )
+
+    def _login(self, password):
+        return self.client.post(
+            self.url, {"email": "bloqueo@example.com", "password": password}
+        )
+
+    def _fallar(self, veces):
+        for _ in range(veces):
+            respuesta = self._login("Incorrecta#1")
+        return respuesta
+
+    def test_cuatro_fallos_no_bloquean_y_un_acierto_reinicia_el_contador(self):
+        respuesta = self._fallar(4)
+        self.assertEqual(respuesta.data["detail"], "Credenciales incorrectas")
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.intentos_fallidos, 4)
+
+        self.assertEqual(self._login(PASSWORD).status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.intentos_fallidos, 0)
+
+        # El contador es de fallos consecutivos: otros 4 tampoco bloquean.
+        self._fallar(4)
+        self.assertEqual(self._login(PASSWORD).status_code, status.HTTP_200_OK)
+
+    def test_quinto_fallo_bloquea_15_minutos_con_mensaje_claro(self):
+        respuesta = self._fallar(5)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("bloqueada temporalmente", respuesta.data["detail"])
+        self.assertIn("15 minutos", respuesta.data["detail"])
+        self.usuario.refresh_from_db()
+        restante = self.usuario.bloqueado_hasta - timezone.now()
+        self.assertTrue(timedelta(minutes=14) < restante <= timedelta(minutes=15))
+
+    def test_durante_el_bloqueo_ni_la_clave_correcta_entra(self):
+        self._fallar(5)
+
+        respuesta = self._login(PASSWORD)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("bloqueada temporalmente", respuesta.data["detail"])
+        self.assertNotIn("access", respuesta.data)
+
+    def test_al_vencer_el_bloqueo_entra_y_se_reinicia(self):
+        self._fallar(5)
+        User.objects.filter(pk=self.usuario.pk).update(
+            bloqueado_hasta=timezone.now() - timedelta(seconds=1)
+        )
+
+        self.assertEqual(self._login(PASSWORD).status_code, status.HTTP_200_OK)
+        self.usuario.refresh_from_db()
+        self.assertIsNone(self.usuario.bloqueado_hasta)
+        self.assertEqual(self.usuario.intentos_fallidos, 0)
+
+    def test_correo_inexistente_no_bloquea_nada(self):
+        for _ in range(6):
+            respuesta = self.client.post(
+                self.url, {"email": "nadie@example.com", "password": "x"}
+            )
+        self.assertEqual(respuesta.data["detail"], "Credenciales incorrectas")
+
+
+class ActivacionPersonalTests(APITestCase):
+    """HU-1.4: el personal define su contraseña con un enlace de un solo uso (24 h)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            negocio=negocio_prueba(),
+            email="admin.activa@example.com",
+            password=PASSWORD,
+            nombre="Admin",
+            apellido="Activa",
+            telefono="3001111111",
+            rol=Rol.ADMIN,
+        )
+        self.sede = Sede.objects.create(
+            negocio=negocio_prueba(), nombre="Centro", direccion="Calle 1"
+        )
+        mail.outbox.clear()
+
+    def _auth(self, usuario):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {LoginSerializer.get_token(usuario).access_token}"
+        }
+
+    def _crear_personal(self, email="cocinero@example.com"):
+        return self.client.post(
+            reverse("registro_personal"),
+            {
+                "email": email,
+                "nombre": "Carlos",
+                "apellido": "Cocina",
+                "telefono": "3005555555",
+                "rol": Rol.COCINA,
+                "sedes_ids": [str(self.sede.pk)],
+            },
+            format="json",
+            **self._auth(self.admin),
+        )
+
+    def _token_del_correo(self):
+        return re.search(r"/activar-cuenta/(\S+)", mail.outbox[-1].body).group(1)
+
+    def _activar(self, token, password="NuevaClave#2026"):
+        return self.client.post(
+            reverse("activar_cuenta"),
+            {"token": token, "password": password, "password_confirmacion": password},
+            format="json",
+        )
+
+    def test_crear_personal_envia_enlace_y_la_cuenta_no_tiene_clave(self):
+        respuesta = self._crear_personal()
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(respuesta.data["usuario"]["activacion_pendiente"])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["cocinero@example.com"])
+        self.assertIn("http://localhost:5173/activar-cuenta/", mail.outbox[0].body)
+        self.assertIn("24 horas", mail.outbox[0].body)
+        usuario = User.objects.get(email="cocinero@example.com")
+        self.assertFalse(usuario.has_usable_password())
+
+    def test_activar_define_la_clave_y_permite_iniciar_sesion(self):
+        self._crear_personal()
+        token = self._token_del_correo()
+
+        datos = self.client.get(reverse("activar_cuenta_token", args=[token]))
+        self.assertEqual(datos.status_code, status.HTTP_200_OK)
+        self.assertEqual(datos.data["email"], "cocinero@example.com")
+
+        self.assertEqual(self._activar(token).status_code, status.HTTP_200_OK)
+        login = self.client.post(
+            reverse("login"),
+            {"email": "cocinero@example.com", "password": "NuevaClave#2026"},
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_el_enlace_es_de_un_solo_uso(self):
+        self._crear_personal()
+        token = self._token_del_correo()
+        self._activar(token)
+
+        respuesta = self._activar(token, "OtraClave#2027")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        usuario = User.objects.get(email="cocinero@example.com")
+        self.assertTrue(usuario.check_password("NuevaClave#2026"))
+
+    def test_el_enlace_vence_a_las_24_horas(self):
+        self._crear_personal()
+        token = self._token_del_correo()
+        registro = TokenActivacion.objects.get()
+        self.assertAlmostEqual(
+            (registro.expira_en - registro.creado_en).total_seconds(),
+            24 * 3600,
+            delta=5,
+        )
+
+        TokenActivacion.objects.update(expira_en=timezone.now() - timedelta(seconds=1))
+
+        self.assertEqual(self._activar(token).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            self.client.get(reverse("activar_cuenta_token", args=[token])).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_token_inventado_y_clave_debil_dan_400(self):
+        self._crear_personal()
+        self.assertEqual(
+            self._activar("token-inventado").status_code, status.HTTP_400_BAD_REQUEST
+        )
+        respuesta = self._activar(self._token_del_correo(), "12345678")
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", respuesta.data)
+
+    def test_reenviar_invalida_el_enlace_anterior(self):
+        self._crear_personal()
+        viejo = self._token_del_correo()
+        usuario = User.objects.get(email="cocinero@example.com")
+
+        respuesta = self.client.post(
+            reverse("reenviar-activacion", args=[usuario.pk]), **self._auth(self.admin)
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        nuevo = self._token_del_correo()
+        self.assertNotEqual(viejo, nuevo)
+        self.assertEqual(self._activar(viejo).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self._activar(nuevo).status_code, status.HTTP_200_OK)
+
+
+class DesactivarCuentaClienteTests(APITestCase):
+    """HU-1.10: el cliente desactiva su cuenta sin perder su historial."""
+
+    def setUp(self):
+        self.cliente = User.objects.create_user(
+            email="me.voy@example.com",
+            password=PASSWORD,
+            nombre="Ana",
+            apellido="Cliente",
+            telefono="3101111111",
+        )
+        self.url = reverse("desactivar_mi_cuenta")
+
+    def _auth(self, usuario):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {LoginSerializer.get_token(usuario).access_token}"
+        }
+
+    def test_desactiva_conserva_pedidos_y_bloquea_el_login(self):
+        operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.desactiva@example.com",
+            password=PASSWORD, nombre="Op", apellido="Uno",
+            telefono="3000000000", rol=Rol.OPERADOR,
+        )
+        sede = Sede.objects.create(negocio=operador.negocio, nombre="Norte", direccion="Calle 1")
+        habilitar_sede_para_pedidos(sede)
+        producto = Producto.objects.create(
+            negocio=operador.negocio, nombre="Papas",
+            precio_base=Decimal("1000.00"), tiempo_preparacion_min=5,
+        )
+        InventarioSede.objects.create(sede=sede, producto=producto, controla_stock=False)
+        pedido = crear_pedido(
+            sede=sede, cliente=self.cliente, detalles=[{"producto": producto, "cantidad": 1}]
+        )
+
+        respuesta = self.client.patch(
+            self.url, {"password": PASSWORD}, format="json", **self._auth(self.cliente)
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.cliente.refresh_from_db()
+        self.assertFalse(self.cliente.is_active)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "recibido")  # el pedido en curso sigue
+        self.assertEqual(pedido.cliente, self.cliente)
+
+        login = self.client.post(
+            reverse("login"), {"email": "me.voy@example.com", "password": PASSWORD}
+        )
+        self.assertEqual(login.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(login.data["detail"], "Cuenta desactivada")
+
+    def test_exige_la_contrasena(self):
+        respuesta = self.client.patch(
+            self.url, {"password": "mala"}, format="json", **self._auth(self.cliente)
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.cliente.refresh_from_db()
+        self.assertTrue(self.cliente.is_active)
+
+    def test_el_token_abierto_deja_de_servir(self):
+        auth = self._auth(self.cliente)
+        self.client.patch(self.url, {"password": PASSWORD}, format="json", **auth)
+
+        self.assertEqual(
+            self.client.get(reverse("usuario_me"), **auth).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_el_personal_no_usa_este_endpoint(self):
+        operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op@example.com", password=PASSWORD,
+            nombre="Op", apellido="Uno", telefono="3000000000", rol=Rol.OPERADOR,
+        )
+        respuesta = self.client.patch(
+            self.url, {"password": PASSWORD}, format="json", **self._auth(operador)
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class RegistroRapidoClienteTests(APITestCase):
+    """HU-5.9: el operador registra un cliente nuevo con nombre y teléfono."""
+
+    def setUp(self):
+        self.url = reverse("clientes_busqueda")
+        self.operador = User.objects.create_user(
+            negocio=negocio_prueba(), email="op.rapido@example.com",
+            password=PASSWORD, nombre="Op", apellido="Rápido",
+            telefono="3000000000", rol=Rol.OPERADOR,
+        )
+
+    def _post(self, datos, usuario=None):
+        token = LoginSerializer.get_token(usuario or self.operador).access_token
+        return self.client.post(
+            self.url, datos, format="json", HTTP_AUTHORIZATION=f"Bearer {token}"
+        )
+
+    def test_registra_con_nombre_y_telefono_sin_correo(self):
+        respuesta = self._post({"nombre": "Luis", "telefono": "3124567890"})
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["direcciones"], [])
+        cliente = User.objects.get(pk=respuesta.data["id"])
+        self.assertEqual(cliente.rol, Rol.CLIENTE)
+        self.assertIsNone(cliente.negocio)
+        self.assertFalse(cliente.has_usable_password())
+        self.assertTrue(cliente.email.endswith("@sin-correo.invalid"))
+
+    def test_registra_con_correo_opcional(self):
+        respuesta = self._post(
+            {"nombre": "Eva", "telefono": "3124567891", "email": "EVA@example.com"}
+        )
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["email"], "eva@example.com")
+
+    def test_telefono_debe_tener_10_digitos(self):
+        for telefono in ("312456789", "31245678901", "312-456-789", "abcdefghij"):
+            with self.subTest(telefono=telefono):
+                respuesta = self._post({"nombre": "Luis", "telefono": telefono})
+                self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("telefono", respuesta.data)
+
+    def test_no_repite_telefono_ni_correo(self):
+        self._post({"nombre": "Luis", "telefono": "3124567890"})
+        User.objects.create_user(
+            email="ya@example.com", password=PASSWORD, nombre="Ya",
+            apellido="Existe", telefono="3999999999",
+        )
+
+        repetido = self._post({"nombre": "Otro", "telefono": "3124567890"})
+        correo = self._post(
+            {"nombre": "Otro", "telefono": "3111111111", "email": "ya@example.com"}
+        )
+
+        self.assertEqual(repetido.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("teléfono", repetido.data["detail"])
+        self.assertEqual(correo.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_el_cliente_registrado_recibe_el_pedido_telefonico(self):
+        sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Norte", direccion="Calle 1")
+        SedeUsuario.objects.create(usuario=self.operador, sede=sede)
+        habilitar_sede_para_pedidos(sede)
+        producto = Producto.objects.create(
+            negocio=negocio_prueba(), nombre="Papas",
+            precio_base=Decimal("1000.00"), tiempo_preparacion_min=5,
+        )
+        InventarioSede.objects.create(sede=sede, producto=producto, controla_stock=False)
+        cliente_id = self._post({"nombre": "Luis", "telefono": "3124567890"}).data["id"]
+
+        token = LoginSerializer.get_token(self.operador).access_token
+        respuesta = self.client.post(
+            reverse("pedido_list_create"),
+            {
+                "sede_id": str(sede.pk),
+                "cliente_id": cliente_id,
+                "canal": "telefono",
+                "detalles": [{"producto_id": str(producto.pk), "cantidad": 1}],
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta.data["cliente_id"], cliente_id)
+        self.assertEqual(respuesta.data["cliente_telefono"], "3124567890")
+
+    def test_cocina_y_clientes_no_registran(self):
+        for rol in (Rol.COCINA, Rol.CLIENTE):
+            usuario = User.objects.create_user(
+                negocio=negocio_de_rol(rol), email=f"{rol}.rap@example.com",
+                password=PASSWORD, nombre="X", apellido="Y",
+                telefono="3000000000", rol=rol,
+            )
+            with self.subTest(rol=rol):
+                respuesta = self._post({"nombre": "Luis", "telefono": "3124567890"}, usuario)
+                self.assertEqual(respuesta.status_code, status.HTTP_403_FORBIDDEN)

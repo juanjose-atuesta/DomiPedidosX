@@ -6,12 +6,18 @@ from apps.core.models import DiaSemana, ModeloUUID
 
 
 class Sede(ModeloUUID):
+    negocio = models.ForeignKey(
+        "negocios.Negocio", on_delete=models.PROTECT, related_name="sedes"
+    )
     nombre = models.CharField(max_length=100)
     direccion = models.TextField()
     telefono = models.CharField(max_length=20, blank=True)
     latitud = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
     longitud = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
     activa = models.BooleanField(default=True)
+    # HU-6.6: al quedar listo un domicilio, se asigna solo al repartidor
+    # disponible con menos pedidos en el día.
+    asignacion_automatica_repartidor = models.BooleanField(default=False)
 
     def __str__(self):
         return self.nombre
@@ -62,14 +68,22 @@ class HorarioAtencion(models.Model):
 
 
 class Feriado(models.Model):
-    """Días de cierre. sede = NULL significa que aplica a todas las sedes."""
+    """Día de cierre de un negocio (HU-8.9).
 
-    sede = models.ForeignKey(
-        Sede, on_delete=models.CASCADE, null=True, blank=True, related_name="feriados"
+    Sin sedes asociadas aplica a todas las sedes del negocio; con sedes, solo
+    a esas. Ese día las sedes afectadas no reciben pedidos.
+    """
+
+    negocio = models.ForeignKey(
+        "negocios.Negocio", on_delete=models.CASCADE, related_name="feriados"
     )
+    sedes = models.ManyToManyField(Sede, blank=True, related_name="feriados")
     fecha = models.DateField(db_index=True)
     nombre = models.CharField(max_length=100)
     cerrado = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["fecha", "nombre"]
 
     def __str__(self):
         return f"{self.fecha} {self.nombre}"

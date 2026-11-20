@@ -1,54 +1,61 @@
-import { useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import CampoTexto from "../../components/CampoTexto"
 import MensajeAlerta from "../../components/MensajeAlerta"
+import SelectorCantidad from "../../components/SelectorCantidad"
+import SelectorOpciones from "../../components/SelectorOpciones"
 import { FlechaIzquierda } from "../../components/Iconos"
-import { fotoHamburguesa } from "../../assets"
-import { PRODUCTOS } from "../../data/productos"
+import { obtenerCatalogoSede } from "../../api/menu"
+import { useCarrito } from "../../context/carrito-context"
+import { useSeleccionOpciones } from "../../hooks/useSeleccionOpciones"
+import { CANTIDAD_MAXIMA, construirLinea } from "../../utils/carrito"
+import { normalizarProducto } from "../../utils/catalogo"
+import { moneda } from "../../utils/formato"
 
-const moneda = (valor) => `$${valor.toLocaleString("es-CO")}`
-
-function FilaOpcion({ tipo, grupo, nombre, extra, marcado, onCambiar }) {
-  const esRadio = tipo === "radio"
-  return (
-    <label className="flex cursor-pointer items-center gap-2 rounded text-sm text-black has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-primario">
-      <input
-        type={tipo}
-        name={grupo}
-        checked={marcado}
-        onChange={onCambiar}
-        className="sr-only"
-      />
-      <span
-        aria-hidden="true"
-        className={`flex h-5 w-5 shrink-0 items-center justify-center text-xs text-white ${
-          esRadio ? "rounded-full" : "rounded-md"
-        } ${marcado ? "bg-primario" : "bg-texto-sec"}`}
-      >
-        {!esRadio && marcado && "✓"}
-      </span>
-      <span className="flex-1">{nombre}</span>
-      {extra > 0 && <span>+{moneda(extra)}</span>}
-    </label>
-  )
+const AVISOS = {
+  cargando: "Cargando producto…",
+  "no-encontrado": "No encontramos este producto",
+  error: "No se pudo cargar el producto. Intenta de nuevo.",
 }
 
 export default function Producto() {
-  const navigate = useNavigate()
   const { id } = useParams()
-  const producto = PRODUCTOS.find((p) => p.id === Number(id))
+  const [parametros] = useSearchParams()
+  const sede = parametros.get("sede")
+  const [producto, setProducto] = useState(null)
+  const [estado, setEstado] = useState(sede ? "cargando" : "no-encontrado")
 
-  const [tamano, setTamano] = useState(0)
-  const [adiciones, setAdiciones] = useState([])
-  const [quitar, setQuitar] = useState([])
-  const [observaciones, setObservaciones] = useState("")
-  const [cantidad, setCantidad] = useState(1)
-  const [agregado, setAgregado] = useState(false)
+  useEffect(() => {
+    if (!sede) return undefined
+    let vigente = true
 
-  if (!producto) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-fondo p-8 text-center">
-        <p className="text-texto">No encontramos este producto</p>
+    obtenerCatalogoSede(sede)
+      .then((catalogo) => {
+        if (!vigente) return
+        const encontrado = catalogo.find((p) => p.id === id)
+        setProducto(encontrado ? normalizarProducto(encontrado) : null)
+        setEstado(encontrado ? "listo" : "no-encontrado")
+      })
+      .catch(() => {
+        if (vigente) setEstado("error")
+      })
+
+    return () => {
+      vigente = false
+    }
+  }, [id, sede])
+
+  if (estado === "listo") return <DetalleProducto producto={producto} sede={sede} />
+  return <AvisoProducto estado={estado} />
+}
+
+function AvisoProducto({ estado }) {
+  const navigate = useNavigate()
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-fondo p-8 text-center">
+      <p className="text-texto">{AVISOS[estado]}</p>
+      {estado !== "cargando" && (
         <button
           type="button"
           onClick={() => navigate("/cliente")}
@@ -56,18 +63,32 @@ export default function Producto() {
         >
           Volver al inicio
         </button>
-      </div>
+      )}
+    </div>
+  )
+}
+
+function DetalleProducto({ producto, sede }) {
+  const navigate = useNavigate()
+  const { carritos, agregar } = useCarrito()
+  const seleccion = useSeleccionOpciones(producto)
+  const [observaciones, setObservaciones] = useState("")
+  const [cantidad, setCantidad] = useState(1)
+  const [aviso, setAviso] = useState("")
+
+  const total = (producto.precio + seleccion.extra) * cantidad
+  const { agotado, imagen: foto } = producto
+
+  const agregarAlCarrito = () => {
+    const linea = construirLinea(producto, seleccion.opciones, cantidad, observaciones)
+    const previa = (carritos[sede] ?? []).find((l) => l.clave === linea.clave)
+    agregar(sede, linea)
+    setAviso(
+      previa && previa.cantidad + cantidad > CANTIDAD_MAXIMA
+        ? `Agregado: el máximo es ${CANTIDAD_MAXIMA} unidades de este producto`
+        : "Agregado al carrito",
     )
   }
-
-  const alternar = (lista, setLista, indice) =>
-    setLista(lista.includes(indice) ? lista.filter((i) => i !== indice) : [...lista, indice])
-
-  const extraTamano = producto.tamanos[tamano]?.extra ?? 0
-  const extraAdiciones = adiciones.reduce((suma, i) => suma + producto.adiciones[i].extra, 0)
-  const total = (producto.precio + extraTamano + extraAdiciones) * cantidad
-  const agotado = !producto.disponible
-  const foto = producto.imagen ?? (producto.categoria === "Hamburguesas" ? fotoHamburguesa : undefined)
 
   return (
     <div className="flex min-h-screen justify-center bg-fondo">
@@ -101,69 +122,12 @@ export default function Producto() {
               </span>
               <span className="text-xl text-texto-sec">⏱ {producto.tiempo} min</span>
             </div>
-            <p className="text-justify text-sm text-texto-sec">
-              {producto.detalle ?? producto.descripcion}
-            </p>
+            <p className="text-justify text-sm text-texto-sec">{producto.descripcion}</p>
           </div>
 
-          {producto.tamanos.length > 0 && (
-            <section className="mt-8">
-              <h2 className="text-xl text-black">Tamaño*</h2>
-              <div className="mt-3 flex flex-col gap-3">
-                {producto.tamanos.map((t, i) => (
-                  <FilaOpcion
-                    key={t.nombre}
-                    tipo="radio"
-                    grupo="tamano"
-                    nombre={t.nombre}
-                    extra={t.extra}
-                    marcado={tamano === i}
-                    onCambiar={() => setTamano(i)}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {producto.adiciones.length > 0 && (
-            <section className="mt-8">
-              <h2 className="text-xl text-black">
-                Adiciones <span className="text-sm">(Opcional)</span>
-              </h2>
-              <div className="mt-3 flex flex-col gap-3">
-                {producto.adiciones.map((a, i) => (
-                  <FilaOpcion
-                    key={a.nombre}
-                    tipo="checkbox"
-                    nombre={a.nombre}
-                    extra={a.extra}
-                    marcado={adiciones.includes(i)}
-                    onCambiar={() => alternar(adiciones, setAdiciones, i)}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {producto.excluibles.length > 0 && (
-            <section className="mt-8">
-              <h2 className="text-xl text-black">
-                Quitar ingredientes <span className="text-sm">(Opcional)</span>
-              </h2>
-              <div className="mt-3 flex flex-col gap-3">
-                {producto.excluibles.map((x, i) => (
-                  <FilaOpcion
-                    key={x.nombre}
-                    tipo="checkbox"
-                    nombre={`Sin ${x.nombre.toLowerCase()}`}
-                    extra={0}
-                    marcado={quitar.includes(i)}
-                    onCambiar={() => alternar(quitar, setQuitar, i)}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
+          <div className="mt-8">
+            <SelectorOpciones seleccion={seleccion} />
+          </div>
 
           <section className="mt-8">
             <h2 className="text-xl text-black">
@@ -182,38 +146,32 @@ export default function Producto() {
       </div>
 
       <div className="fixed bottom-[22px] left-1/2 w-[calc(100%-32px)] max-w-[398px] -translate-x-1/2">
-        {agregado && (
+        {aviso && (
           <MensajeAlerta tipo="exito" className="mb-2">
-            Agregado al carrito
+            {aviso}.{" "}
+            <button
+              type="button"
+              onClick={() => navigate("/cliente/carrito")}
+              className="font-semibold underline"
+            >
+              Ver carrito
+            </button>
           </MensajeAlerta>
         )}
         <div className="flex items-center justify-between gap-3 rounded-full bg-borde p-3 shadow-[0_4px_16px_rgba(0,0,0,0.15)]">
-          <div className="flex items-center gap-3 pl-1">
-            <button
-              type="button"
-              aria-label="Quitar uno"
-              disabled={cantidad === 1}
-              onClick={() => setCantidad(cantidad - 1)}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-texto bg-white text-xl text-texto disabled:border-0 disabled:bg-deshabilitado disabled:text-white"
-            >
-              −
-            </button>
-            <span aria-live="polite" className="w-6 text-center text-xl font-medium text-black">
-              {cantidad}
-            </span>
-            <button
-              type="button"
-              aria-label="Agregar uno"
-              onClick={() => setCantidad(Math.min(99, cantidad + 1))}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-texto bg-white text-xl text-texto"
-            >
-              +
-            </button>
+          <div className="pl-1">
+            <SelectorCantidad
+              cantidad={cantidad}
+              onCambiar={(nueva) => {
+                setCantidad(nueva)
+                setAviso("")
+              }}
+            />
           </div>
           <button
             type="button"
-            disabled={agotado || agregado}
-            onClick={() => setAgregado(true)}
+            disabled={agotado}
+            onClick={agregarAlCarrito}
             className="h-11 whitespace-nowrap rounded-full bg-primario px-5 text-sm font-semibold text-white enabled:hover:bg-vino disabled:bg-deshabilitado"
           >
             {agotado ? "Agotado" : `Agregar · ${moneda(total)}`}

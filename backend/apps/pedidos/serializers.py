@@ -2,15 +2,20 @@ from rest_framework import serializers
 
 from apps.menu.models import Producto
 from apps.sedes.models import Sede
+from apps.usuarios.models import Rol, User
 
 from .models import (
     CanalPedido,
     DetallePedido,
     DetallePedidoOpcion,
+    EstadoPedido,
     MetodoPago,
     Pedido,
     TipoPedido,
 )
+from .services import estados_siguientes
+
+CANTIDAD_MAXIMA_POR_LINEA = 10
 
 
 class DetallePedidoInputSerializer(serializers.Serializer):
@@ -18,7 +23,9 @@ class DetallePedidoInputSerializer(serializers.Serializer):
         source="producto",
         queryset=Producto.objects.all(),
     )
-    cantidad = serializers.IntegerField(min_value=1)
+    cantidad = serializers.IntegerField(
+        min_value=1, max_value=CANTIDAD_MAXIMA_POR_LINEA
+    )
     notas_producto = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -34,7 +41,14 @@ class DetallePedidoInputSerializer(serializers.Serializer):
 class PedidoCreateSerializer(serializers.Serializer):
     sede_id = serializers.PrimaryKeyRelatedField(
         source="sede",
-        queryset=Sede.objects.filter(activa=True),
+        queryset=Sede.objects.filter(activa=True, negocio__activo=True),
+    )
+    # Solo lo usan operador y admin; si lo envía un cliente se ignora.
+    cliente_id = serializers.PrimaryKeyRelatedField(
+        source="cliente",
+        queryset=User.objects.filter(rol=Rol.CLIENTE, is_active=True),
+        required=False,
+        allow_null=True,
     )
     cliente_nombre = serializers.CharField(
         max_length=200,
@@ -78,20 +92,15 @@ class PedidoCreateSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
-    costo_domicilio = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        min_value=0,
+    # El costo de domicilio y el descuento NO se reciben: el servidor los
+    # calcula con la zona de cobertura y la promoción.
+    codigo_promocion = serializers.CharField(
+        max_length=50,
         required=False,
-        default=0,
+        allow_blank=True,
+        default="",
     )
-    descuento = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        min_value=0,
-        required=False,
-        default=0,
-    )
+    promocion_id = serializers.UUIDField(required=False, allow_null=True)
     observaciones = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -115,6 +124,42 @@ class PedidoCreateSerializer(serializers.Serializer):
             )
 
         return attrs
+
+
+class PedidoFiltroSerializer(serializers.Serializer):
+    sede = serializers.UUIDField(required=False)
+    # Uno o varios estados separados por coma: ?estado=recibido,en_preparacion
+    estado = serializers.CharField(required=False)
+    fecha = serializers.DateField(required=False)
+
+    def validate_estado(self, value):
+        estados = [estado.strip() for estado in value.split(",") if estado.strip()]
+        if not estados or any(e not in EstadoPedido.values for e in estados):
+            raise serializers.ValidationError("El estado no es valido.")
+        return estados
+
+
+class CancelarPedidoSerializer(serializers.Serializer):
+    motivo = serializers.CharField(
+        max_length=300, required=False, allow_blank=True, default=""
+    )
+
+
+class RechazarPedidoSerializer(serializers.Serializer):
+    motivo = serializers.CharField(
+        min_length=10,
+        max_length=300,
+        error_messages={
+            "min_length": "El motivo del rechazo debe tener al menos 10 caracteres.",
+            "blank": "El motivo del rechazo es obligatorio.",
+            "required": "El motivo del rechazo es obligatorio.",
+        },
+    )
+
+
+class CambioEstadoSerializer(serializers.Serializer):
+    estado = serializers.ChoiceField(choices=EstadoPedido.choices)
+    comentario = serializers.CharField(required=False, allow_blank=True)
 
 
 class DetallePedidoOpcionSalidaSerializer(serializers.ModelSerializer):
@@ -145,8 +190,39 @@ class DetallePedidoSalidaSerializer(serializers.ModelSerializer):
 
 class PedidoSerializer(serializers.ModelSerializer):
     sede_id = serializers.UUIDField(read_only=True)
+    sede_nombre = serializers.CharField(source="sede.nombre", read_only=True)
+    negocio_nombre = serializers.CharField(source="sede.negocio.nombre", read_only=True)
     cliente_id = serializers.UUIDField(read_only=True, allow_null=True)
     detalles = DetallePedidoSalidaSerializer(many=True, read_only=True)
+    estados_siguientes = serializers.SerializerMethodField()
+    zona_nombre = serializers.CharField(source="zona.nombre", read_only=True, default=None)
+    promocion_nombre = serializers.CharField(
+        source="promocion.nombre", read_only=True, default=None
+    )
+    puede_cancelar = serializers.SerializerMethodField()
+    repartidor_id = serializers.UUIDField(read_only=True, allow_null=True)
+    repartidor_nombre = serializers.SerializerMethodField()
+    esperando_repartidor = serializers.SerializerMethodField()
+    asignacion_automatica = serializers.BooleanField(
+        source="sede.asignacion_automatica_repartidor", read_only=True
+    )
+
+    def get_puede_cancelar(self, pedido):
+        return pedido.estado == EstadoPedido.RECIBIDO
+
+    def get_repartidor_nombre(self, pedido):
+        return pedido.repartidor.nombre_completo if pedido.repartidor_id else None
+
+    def get_esperando_repartidor(self, pedido):
+        """Domicilio listo que nadie lleva todavía."""
+        return (
+            pedido.tipo == TipoPedido.DOMICILIO
+            and pedido.estado == EstadoPedido.LISTO_DESPACHO
+            and pedido.repartidor_id is None
+        )
+
+    def get_estados_siguientes(self, pedido):
+        return estados_siguientes(pedido)
 
     class Meta:
         model = Pedido
@@ -159,7 +235,19 @@ class PedidoSerializer(serializers.ModelSerializer):
             "canal",
             "tipo",
             "sede_id",
+            "sede_nombre",
+            "negocio_nombre",
+            "direccion_entrega",
             "estado",
+            "estados_siguientes",
+            "puede_cancelar",
+            "motivo_cancelacion",
+            "zona_nombre",
+            "promocion_nombre",
+            "repartidor_id",
+            "repartidor_nombre",
+            "esperando_repartidor",
+            "asignacion_automatica",
             "metodo_pago",
             "subtotal",
             "costo_domicilio",

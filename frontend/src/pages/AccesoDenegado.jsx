@@ -1,8 +1,10 @@
 import { useNavigate } from "react-router-dom"
 import Boton from "../components/Boton"
+import { useAuth } from "../context/auth-context"
 
 export default function AccesoDenegado() {
   const navigate = useNavigate()
+  const { usuario, logout } = useAuth()
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-fondo p-6">
@@ -18,7 +20,14 @@ export default function AccesoDenegado() {
         </span>
         <h1 className="font-titulo text-[28px] font-semibold leading-9 text-texto">Acceso denegado</h1>
         <p className="text-base text-texto-sec">No tienes permiso para ver esta sección.</p>
-        <Boton onClick={() => navigate("/")}>Volver al inicio</Boton>
+        <div className="flex flex-wrap justify-center gap-3">
+          <Boton onClick={() => navigate("/")}>Volver al inicio</Boton>
+          {usuario && (
+            <Boton tipo="secundario" onClick={logout}>
+              Cerrar sesión
+            </Boton>
+          )}
+        </div>
       </section>
     </main>
   )

@@ -6,6 +6,7 @@ from rest_framework.test import APIRequestFactory, APITestCase
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import AccessToken
 
+from apps.core.datos_prueba import negocio_de_rol
 from apps.usuarios.models import Rol, User
 from apps.usuarios.serializers import LoginSerializer
 
@@ -71,6 +72,7 @@ VISTAS_POR_ROL = [
 class PermisosPorRolTests(APITestCase):
     def _crear_usuario(self, rol, email=None, is_active=True):
         return User.objects.create_user(
+            negocio=negocio_de_rol(rol),
             email=email or f"{rol}@example.com",
             password=PASSWORD,
             nombre="Usuario",
