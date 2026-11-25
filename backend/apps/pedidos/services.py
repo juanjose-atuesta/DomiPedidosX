@@ -30,6 +30,7 @@ from apps.promociones.services import (
 from apps.sedes.models import Feriado, Sede, SedeUsuario
 from apps.usuarios.models import Rol
 
+from .capacidad import MENSAJE_CAPACIDAD_LLENA, verificar_capacidad_sede
 from .models import (
     CanalPedido,
     DetallePedido,
@@ -397,6 +398,9 @@ def _cotizar(
         problemas.append(MENSAJE_FERIADO)
     elif not sede_abierta(sede, momento):
         problemas.append(_mensaje_sede_cerrada(sede, momento))
+    elif verificar_capacidad_sede(sede, momento).llena:
+        # HU-9.5: los pedidos ya confirmados siguen su curso; solo se frenan los nuevos.
+        problemas.append(MENSAJE_CAPACIDAD_LLENA)
 
     zona = None
     costo_domicilio = Decimal("0.00")
@@ -523,6 +527,9 @@ def crear_pedido(
     """
     with transaction.atomic():
         sede, detalles = _preparar(sede, sede_id, detalles, tipo)
+        # Bloquea la sede: dos pedidos simultáneos no pueden pasar ambos el
+        # último cupo de capacidad.
+        Sede.objects.select_for_update().filter(pk=sede.pk).first()
 
         if canal not in CanalPedido.values:
             raise ValueError("El canal del pedido no es valido.")
