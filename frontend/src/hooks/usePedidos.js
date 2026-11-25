@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { actualizarEstadoPedido, listarPedidos } from "../api/pedidos"
 import { mensajeDeError } from "../utils/errores"
 
@@ -11,6 +11,8 @@ export function usePedidos({ sede, estado, fecha, intervalo = INTERVALO_ACTUALIZ
   const [cargadoDe, setCargadoDe] = useState(null)
   const [error, setError] = useState("")
   const [procesandoId, setProcesandoId] = useState(null)
+  // Al cambiar fuerza una consulta inmediata (p. ej. al llegar una alerta de cancelación).
+  const [recargas, setRecargas] = useState(0)
 
   useEffect(() => {
     let vigente = true
@@ -41,7 +43,7 @@ export function usePedidos({ sede, estado, fecha, intervalo = INTERVALO_ACTUALIZ
       vigente = false
       clearInterval(temporizador)
     }
-  }, [clave, sede, estado, fecha, intervalo])
+  }, [clave, sede, estado, fecha, intervalo, recargas])
 
   const avanzar = async (pedido, nuevoEstado) => {
     setProcesandoId(pedido.id)
@@ -63,5 +65,15 @@ export function usePedidos({ sede, estado, fecha, intervalo = INTERVALO_ACTUALIZ
   const reemplazar = (actualizado) =>
     setPedidos((actuales) => actuales.map((p) => (p.id === actualizado.id ? actualizado : p)))
 
-  return { pedidos, cargando: cargadoDe !== clave, error, procesandoId, avanzar, reemplazar }
+  const recargar = useCallback(() => setRecargas((n) => n + 1), [])
+
+  return {
+    pedidos,
+    cargando: cargadoDe !== clave,
+    error,
+    procesandoId,
+    avanzar,
+    reemplazar,
+    recargar,
+  }
 }

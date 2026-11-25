@@ -19,6 +19,7 @@ from apps.notificaciones.services import (
     crear_alerta_stock_bajo,
     notificar_cambio_estado,
     notificar_cancelacion,
+    notificar_cancelacion_a_sede,
     notificar_confirmacion,
 )
 from apps.promociones.services import (
@@ -675,6 +676,9 @@ def cancelar_pedido(pedido_id, *, usuario, motivo="", por_sede=False):
             comentario=f"Rechazado por la sede: {motivo}" if por_sede else motivo,
         )
         notificar_cancelacion(pedido, por_sede=por_sede)
+        if not por_sede:
+            # HU-7.5: el operador se entera al instante de que ya no debe prepararlo.
+            notificar_cancelacion_a_sede(pedido)
         return pedido
 
 
