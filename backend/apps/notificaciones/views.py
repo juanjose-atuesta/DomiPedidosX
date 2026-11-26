@@ -2,7 +2,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import EsAdmin, EsCocina, EsOperador, exigir_negocio
+from apps.core.permissions import EsAdmin, EsCocina, EsOperador, EsRepartidor, exigir_negocio
 
 from .models import ConfiguracionCorreos
 from .serializers import (
@@ -12,7 +12,7 @@ from .serializers import (
 )
 from .services import notificaciones_visibles_para
 
-PERMISO_PANEL = EsOperador | EsCocina | EsAdmin
+PERMISO_PANEL = EsOperador | EsCocina | EsAdmin | EsRepartidor
 LIMITE_NOTIFICACIONES = 50
 
 
@@ -36,7 +36,7 @@ class ConfiguracionCorreosView(APIView):
 
 
 class NotificacionListView(APIView):
-    """Alertas del panel del personal (HU-7.5).
+    """Alertas del panel del personal (HU-7.5 y HU-7.6).
 
     Filtros opcionales: ?sede=<uuid>&leida=false&tipo=pedido_cancelado.
     Responde las 50 más recientes y cuántas siguen sin leer.
