@@ -21,6 +21,7 @@ from .serializers import (
     PedidoCreateSerializer,
     PedidoFiltroSerializer,
     PedidoSerializer,
+    UbicacionRepartidorSerializer,  
 )
 from .services import (
     cambiar_estado_pedido,
@@ -29,6 +30,7 @@ from .services import (
     crear_pedido,
     pedidos_visibles_para,
     rechazar_pedido,
+    registrar_ubicacion_repartidor,
 )
 
 PERMISO_CREAR = EsCliente | EsOperador | EsAdmin
@@ -237,3 +239,19 @@ class PedidoRechazarView(APIView):
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(PedidoSerializer(pedido).data)
+
+class PedidoUbicacionView(APIView):
+    """El repartidor comparte su ubicación mientras entrega (HU-7.7)."""
+
+    permission_classes = [EsRepartidor]
+
+    def post(self, request, pk):
+        if not Pedido.objects.filter(pk=pk, repartidor=request.user).exists():
+            return Response({"detail": "Pedido no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = UbicacionRepartidorSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            registrar_ubicacion_repartidor(pk, usuario=request.user, **serializer.validated_data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(status=status.HTTP_204_NO_CONTENT)

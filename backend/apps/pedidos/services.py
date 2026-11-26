@@ -278,6 +278,12 @@ def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
             )
 
         pedido.estado = estado
+        if estado == EstadoPedido.ENTREGADO:
+            pedido.ubicacion_repartidor_lat = None
+            pedido.ubicacion_repartidor_lng = None
+            pedido.ubicacion_actualizada_en = None
+            campos += ["ubicacion_repartidor_lat", "ubicacion_repartidor_lng", "ubicacion_actualizada_en"]
+
         pedido.save(update_fields=campos)
         HistorialEstado.objects.create(
             pedido=pedido,
@@ -762,3 +768,15 @@ def descontar_stock_pedido(pedido):
                 )
 
         return pedido
+
+def registrar_ubicacion_repartidor(pedido_id, *, usuario, latitud, longitud):
+    pedido = Pedido.objects.get(pk=pedido_id, repartidor=usuario)
+    if pedido.estado != EstadoPedido.EN_CAMINO:
+        raise ValueError("Solo se comparte la ubicación mientras el pedido está en camino.")
+    pedido.ubicacion_repartidor_lat = latitud
+    pedido.ubicacion_repartidor_lng = longitud
+    pedido.ubicacion_actualizada_en = timezone.now()
+    pedido.save(update_fields=[
+        "ubicacion_repartidor_lat", "ubicacion_repartidor_lng", "ubicacion_actualizada_en",
+    ])
+    return pedido
