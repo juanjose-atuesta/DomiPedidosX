@@ -117,6 +117,7 @@ class CorreosPorEventoTests(APITestCase):
         self.assertEqual(mail.outbox, [])
         self.assertFalse(
             Notificacion.objects.filter(
+                canal="correo",
                 tipo__in=[TipoNotificacion.PEDIDO_CANCELADO, TipoNotificacion.REPARTIDOR_ASIGNADO]
             ).exists()
         )
@@ -357,3 +358,158 @@ class NotificacionCancelacionOperadorTests(APITestCase):
 
         self.assertEqual([p["id"] for p in entrantes.data], [activo.pk])
         self.assertEqual([p["id"] for p in tablero.data], [activo.pk])
+
+class NotificacionRepartidorAsignadoTests(APITestCase):
+    """HU-7.6: el repartidor recibe un aviso al asignarle un pedido."""
+
+    def setUp(self):
+        self.sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Centro", direccion="C1")
+        habilitar_sede_para_pedidos(self.sede)
+        self.operador = crear_usuario_prueba("op.rep@example.com", Rol.OPERADOR, sede=self.sede)
+        self.cocina = crear_usuario_prueba("cocina.rep@example.com", Rol.COCINA, sede=self.sede)
+        self.repartidor = crear_usuario_prueba(
+            "rep.aviso@example.com", Rol.REPARTIDOR, sede=self.sede, nombre="Rita"
+        )
+        self.otro_repartidor = crear_usuario_prueba(
+            "rep.otro@example.com", Rol.REPARTIDOR, sede=self.sede, nombre="Raúl"
+        )
+        self.cliente = crear_usuario_prueba("cli.rep@example.com", Rol.CLIENTE)
+        self.producto = producto_en_sede(self.sede)
+        self.url = reverse("notificacion_list")
+
+    def _pedido_listo(self):
+        """Pedido a domicilio en estado 'listo para despacho'."""
+        pedido = crear_pedido(
+            sede=self.sede,
+            cliente=self.cliente,
+            detalles=[{"producto": self.producto, "cantidad": 1}],
+            tipo="domicilio",
+            direccion_entrega="Calle 5 # 10-20",
+            entrega_lat=Decimal(LAT_PRUEBA),
+            entrega_lng=Decimal(LNG_PRUEBA),
+        )
+        cambiar_estado_pedido(pedido.pk, estado="en_preparacion", usuario=self.cocina)
+        cambiar_estado_pedido(pedido.pk, estado="listo_despacho", usuario=self.cocina)
+        return pedido
+
+    def _avisos(self, usuario=None):
+        return Notificacion.objects.filter(
+            tipo=TipoNotificacion.REPARTIDOR_ASIGNADO,
+            canal="sistema",
+            usuario=usuario or self.repartidor,
+        )
+
+    def test_asignacion_manual_crea_aviso_con_numero_y_direccion(self):
+        pedido = self._pedido_listo()
+
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+
+        aviso = self._avisos().get()
+        self.assertEqual(aviso.pedido, pedido)
+        self.assertEqual(aviso.sede, self.sede)
+        self.assertFalse(aviso.leida)
+        self.assertIn(f"#{pedido.pk}", aviso.asunto)
+        self.assertIn(f"#{pedido.pk}", aviso.mensaje)
+        self.assertIn("Calle 5 # 10-20", aviso.mensaje)
+
+    def test_asignacion_automatica_tambien_avisa(self):
+        self.sede.asignacion_automatica_repartidor = True
+        self.sede.save()
+
+        pedido = self._pedido_listo()  # al quedar listo se asigna solo
+
+        pedido.refresh_from_db()
+        elegido = pedido.repartidor
+        self.assertIsNotNone(elegido)
+        self.assertEqual(self._avisos(elegido).count(), 1)
+
+    def test_pedido_sin_repartidor_no_genera_aviso(self):
+        self._pedido_listo()  # asignación automática desactivada
+
+        self.assertFalse(
+            Notificacion.objects.filter(tipo=TipoNotificacion.REPARTIDOR_ASIGNADO).exists()
+        )
+
+    def test_el_aviso_no_depende_de_los_correos_del_cliente(self):
+        ConfiguracionCorreos.objects.update_or_create(
+            negocio=self.sede.negocio, defaults={"asignacion_repartidor": False}
+        )
+        pedido = self._pedido_listo()
+
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+
+        self.assertEqual(self._avisos().count(), 1)
+
+    def test_repartidor_lista_sus_avisos_no_leidos(self):
+        pedido = self._pedido_listo()
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+
+        respuesta = self.client.get(
+            self.url,
+            {"leida": "false", "tipo": "repartidor_asignado"},
+            **auth_prueba(self.repartidor),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["no_leidas"], 1)
+        self.assertEqual(respuesta.data["resultados"][0]["pedido_id"], pedido.pk)
+
+    def test_otro_repartidor_no_ve_el_aviso(self):
+        pedido = self._pedido_listo()
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+
+        respuesta = self.client.get(self.url, **auth_prueba(self.otro_repartidor))
+
+        self.assertEqual(respuesta.data["resultados"], [])
+
+    def test_repartidor_no_ve_alertas_generales_de_la_sede(self):
+        Notificacion.objects.create(
+            sede=self.sede,
+            tipo=TipoNotificacion.ALERTA_STOCK_BAJO,
+            canal="sistema",
+            asunto="Stock bajo",
+            mensaje="Alerta del operador",
+        )
+
+        respuesta = self.client.get(self.url, **auth_prueba(self.repartidor))
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["resultados"], [])
+
+    def test_el_operador_no_ve_el_aviso_del_repartidor(self):
+        pedido = self._pedido_listo()
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+
+        respuesta = self.client.get(self.url, **auth_prueba(self.operador))
+
+        self.assertEqual(respuesta.data["resultados"], [])
+
+    def test_repartidor_marca_su_aviso_como_leido(self):
+        pedido = self._pedido_listo()
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+        aviso = self._avisos().get()
+
+        respuesta = self.client.patch(
+            reverse("notificacion_detalle", args=[aviso.pk]),
+            {"leida": True},
+            format="json",
+            **auth_prueba(self.repartidor),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        aviso.refresh_from_db()
+        self.assertTrue(aviso.leida)
+
+    def test_repartidor_no_marca_el_aviso_de_otro(self):
+        pedido = self._pedido_listo()
+        asignar_repartidor(pedido.pk, self.repartidor.pk, asignado_por=self.operador)
+        aviso = self._avisos().get()
+
+        respuesta = self.client.patch(
+            reverse("notificacion_detalle", args=[aviso.pk]),
+            {"leida": True},
+            format="json",
+            **auth_prueba(self.otro_repartidor),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_404_NOT_FOUND)
