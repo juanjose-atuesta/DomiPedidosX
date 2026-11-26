@@ -1,6 +1,15 @@
 import BarraLateral from "../components/BarraLateral"
+import CampanaNotificaciones from "../components/CampanaNotificaciones"
+import { useAuth } from "../context/auth-context"
+import { tieneRol } from "../utils/roles"
 
-export default function AdminLayout({ titulo, accion, children }) {
+// Roles del panel que reciben alertas de sus sedes (HU-7.5).
+const ROLES_CON_ALERTAS = ["operador", "cocina", "admin"]
+
+export default function AdminLayout({ titulo, accion, onNotificacion, children }) {
+  const { usuario } = useAuth()
+  const conAlertas = tieneRol(usuario, ROLES_CON_ALERTAS)
+
   return (
     <div className="flex min-h-screen bg-fondo">
       <BarraLateral />
@@ -9,7 +18,10 @@ export default function AdminLayout({ titulo, accion, children }) {
           <h1 className="font-titulo text-[40px] font-bold leading-[48px] text-texto">
             {titulo}
           </h1>
-          {accion}
+          <div className="flex items-center gap-3">
+            {accion}
+            {conAlertas && <CampanaNotificaciones onNuevas={onNotificacion} />}
+          </div>
         </div>
         {children}
       </main>
