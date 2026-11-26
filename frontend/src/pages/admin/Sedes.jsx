@@ -142,6 +142,14 @@ export default function Sedes() {
                     >
                       Zonas
                     </Boton>
+                    
+                    <Boton
+                      tipo="secundario"
+                      onClick={() => navigate(`/admin/sedes/${sede.id}/capacidad`)}
+                    >
+                      Capacidad
+                    </Boton>                    
+                    
                     {sede.activa ? (
                       <Boton
                         tipo="secundario"
