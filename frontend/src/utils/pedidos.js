@@ -31,3 +31,31 @@ export function accionEstado(estado) {
 export function textoTipoPedido(tipo) {
   return tipo === "domicilio" ? "Domicilio" : "Recoger en sede"
 }
+
+const ESTADOS_FINALES = ["entregado", "cancelado"]
+
+// Devuelve los minutos que faltan y la hora estimada, o null si no aplica.
+export function tiempoEstimado(pedido) {
+  if (ESTADOS_FINALES.includes(pedido.estado)) return null
+  if (!pedido.tiempo_estimado_entrega) return null
+
+  const llegada = new Date(pedido.tiempo_estimado_entrega)
+  const minutos = Math.round((llegada - Date.now()) / 60000)
+  const hora = llegada.toLocaleTimeString("es-CO", { hour: "numeric", minute: "2-digit" })
+  return { minutos, hora }
+}
+
+// Texto de la notificacion cuando cambia el estado de un pedido.
+export function textoAviso(pedido) {
+  const textos = {
+    en_preparacion: "ya está en preparación",
+    listo_despacho:
+      pedido.tipo === "domicilio"
+        ? "ya está listo y pronto saldrá a tu dirección"
+        : "ya está listo para recoger en la sede",
+    en_camino: "va en camino",
+    entregado: "fue entregado. ¡Buen provecho!",
+  }
+  const texto = textos[pedido.estado]
+  return texto ? `Tu pedido #${pedido.id} ${texto}` : null
+}
