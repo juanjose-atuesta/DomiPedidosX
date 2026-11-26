@@ -35,6 +35,7 @@ import RegistroRestaurante from "./pages/auth/RegistroRestaurante"
 import RegistroAdministrador from "./pages/auth/RegistroAdministrador"
 import RutaProtegida from "./routes/RutaProtegida"
 import Seguimiento from "./pages/cliente/Seguimiento"
+import Capacidad from "./pages/admin/Capacidad"
 import { ROLES_POR_SECCION } from "./utils/roles"
 
 
@@ -60,6 +61,7 @@ export default function App() {
       <Route path="/registro-administrador" element={<RegistroAdministrador />} />
       <Route path="/cliente/pedidos" element={<Pedidos />} />
       <Route path="/cliente/seguimiento/:id" element={<Seguimiento />} />
+      <Route path="/admin/sedes/:id/capacidad" element={<Capacidad />} />
 
       {/* Administración */}
       <Route
