@@ -32,3 +32,7 @@ export async function rechazarPedido(id, motivo) {
   const { data } = await api.post(`/pedidos/${id}/rechazar/`, { motivo })
   return data
 }
+
+export async function enviarUbicacionPedido(id, latitud, longitud) {
+  await api.post(`/pedidos/${id}/ubicacion/`, { latitud, longitud })
+}
