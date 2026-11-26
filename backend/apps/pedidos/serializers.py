@@ -202,6 +202,8 @@ class PedidoSerializer(serializers.ModelSerializer):
     puede_cancelar = serializers.SerializerMethodField()
     repartidor_id = serializers.UUIDField(read_only=True, allow_null=True)
     repartidor_nombre = serializers.SerializerMethodField()
+    repartidor_lat = serializers.SerializerMethodField()
+    repartidor_lng = serializers.SerializerMethodField()
     esperando_repartidor = serializers.SerializerMethodField()
     asignacion_automatica = serializers.BooleanField(
         source="sede.asignacion_automatica_repartidor", read_only=True
@@ -212,6 +214,16 @@ class PedidoSerializer(serializers.ModelSerializer):
 
     def get_repartidor_nombre(self, pedido):
         return pedido.repartidor.nombre_completo if pedido.repartidor_id else None
+
+    def get_repartidor_lat(self, pedido):
+        if pedido.repartidor_id and hasattr(pedido.repartidor, 'perfil_repartidor'):
+            return float(pedido.repartidor.perfil_repartidor.latitud) if pedido.repartidor.perfil_repartidor.latitud else None
+        return None
+
+    def get_repartidor_lng(self, pedido):
+        if pedido.repartidor_id and hasattr(pedido.repartidor, 'perfil_repartidor'):
+            return float(pedido.repartidor.perfil_repartidor.longitud) if pedido.repartidor.perfil_repartidor.longitud else None
+        return None
 
     def get_esperando_repartidor(self, pedido):
         """Domicilio listo que nadie lleva todavía."""
@@ -246,6 +258,8 @@ class PedidoSerializer(serializers.ModelSerializer):
             "promocion_nombre",
             "repartidor_id",
             "repartidor_nombre",
+            "repartidor_lat",
+            "repartidor_lng", 
             "esperando_repartidor",
             "asignacion_automatica",
             "metodo_pago",
