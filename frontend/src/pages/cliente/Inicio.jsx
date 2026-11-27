@@ -120,7 +120,7 @@ export default function Inicio() {
 
   return (
     <div className="flex h-dvh justify-center pb-[106px]" style={FONDO}>
-      <div className="h-full w-full max-w-[430px] overflow-y-auto pb-4">
+      <div className="sin-barra max-w-[430px] overflow-y-auto pb-4">
         <header className="flex items-center justify-between px-[19px] pt-4">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium tracking-wide text-primario">DomiPedidosX</span>
@@ -169,7 +169,7 @@ export default function Inicio() {
           />
         </label>
 
-        <div className="mt-8 flex gap-[14px] overflow-x-auto px-4 pb-1">
+        <div className="sin-barra flex gap-[14px] overflow-x-auto px-4 pb-1">
           <ChipCategoria activo={categoria === TODO} onClick={() => setCategoria(TODO)}>
             Todo
           </ChipCategoria>
@@ -193,11 +193,11 @@ export default function Inicio() {
             secciones.map((s) => (
               <section key={s.id} className="flex flex-col gap-2">
                 <h2 className="text-base font-semibold text-black">{s.titulo}</h2>
-                <div className="flex gap-[21px] overflow-x-auto pb-2">
+                <div className="sin-barra flex gap-[21px] overflow-x-auto pb-2">
                   {s.productos.map((p) => (
                     <div
                       key={p.id}
-                      className={`w-[250px] shrink-0 ${p.agotado ? "" : "cursor-pointer"}`}
+                      className={`flex w-[250px] shrink-0 ${p.agotado ? "" : "cursor-pointer"}`}
                       onClick={p.agotado ? undefined : () => verProducto(p.id)}
                     >
                       <TarjetaProducto
