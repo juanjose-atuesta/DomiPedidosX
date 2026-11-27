@@ -29,4 +29,6 @@ urlpatterns = [
     path("api/repartos/", include("apps.repartos.urls")),
     # Configuración de correos por evento
     path("api/notificaciones/", include("apps.notificaciones.urls")),
+    # Reportes del administrador
+    path("api/reportes/", include("apps.reportes.urls")),
 ]
