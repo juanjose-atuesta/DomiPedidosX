@@ -18,6 +18,7 @@ from .serializers import CapacidadFranjaSerializer
 from .models import CapacidadFranja
 
 NO_ENCONTRADA = {"detail": "Zona no encontrada."}
+NO_ENCONTRADA_FRANJA = {"detail": "Franja no encontrada."}
 
 
 def _sede_del_negocio(request, sede_id):
@@ -144,15 +145,82 @@ def _es_uuid(valor):
         return False
     return True
 
+
 class CapacidadSedeView(APIView):
+    """Franjas de capacidad de una sede (HU-9.2).
+
+    El operador define el tope de pedidos simultáneos por franja de 1 hora para
+    su propia sede; el admin puede hacerlo en cualquier sede de su negocio.
+    """
+
     permission_classes = [EsAdmin | EsOperador]
 
+    def _sede(self, request, sede_id):
+        sede = _sede_del_negocio(request, sede_id)
+        if sede is None:
+            return None
+        if request.user.rol == Rol.OPERADOR:
+            exigir_operacion_sede(request.user, sede)
+        return sede
+
     def get(self, request, sede_id):
-        franjas = CapacidadFranja.objects.filter(sede_id=sede_id).order_by('dia_semana', 'hora_inicio')
-        return Response(CapacidadFranjaSerializer(franjas, many=True).data)
+        sede = self._sede(request, sede_id)
+        if sede is None:
+            return Response({"detail": "Sede no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        franjas = sede.franjas_capacidad.filter(activa=True).order_by("dia_semana", "hora_inicio")
+        return Response(
+            {
+                "sede_id": str(sede.pk),
+                "tope_general": sede.tope_general_pedidos,
+                "franjas": CapacidadFranjaSerializer(franjas, many=True).data,
+            }
+        )
 
     def post(self, request, sede_id):
-        serializer = CapacidadFranjaSerializer(data=request.data)
+        sede = self._sede(request, sede_id)
+        if sede is None:
+            return Response({"detail": "Sede no encontrada."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = CapacidadFranjaSerializer(data=request.data, context={"sede": sede})
         serializer.is_valid(raise_exception=True)
-        serializer.save(sede_id=sede_id)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        franja = serializer.save(sede=sede)
+        return Response(CapacidadFranjaSerializer(franja).data, status=status.HTTP_201_CREATED)
+
+
+class CapacidadFranjaDetailView(APIView):
+    permission_classes = [EsAdmin | EsOperador]
+
+    def _franja(self, request, pk):
+        try:
+            franja = CapacidadFranja.objects.select_related("sede").get(
+                pk=pk, activa=True, sede__negocio_id=request.user.negocio_id
+            )
+        except (CapacidadFranja.DoesNotExist, ValueError):
+            return None
+        if request.user.rol == Rol.OPERADOR:
+            exigir_operacion_sede(request.user, franja.sede)
+        return franja
+
+    def put(self, request, pk):
+        return self._actualizar(request, pk, partial=False)
+
+    def patch(self, request, pk):
+        return self._actualizar(request, pk, partial=True)
+
+    def _actualizar(self, request, pk, *, partial):
+        franja = self._franja(request, pk)
+        if franja is None:
+            return Response(NO_ENCONTRADA_FRANJA, status=status.HTTP_404_NOT_FOUND)
+        serializer = CapacidadFranjaSerializer(
+            franja, data=request.data, partial=partial, context={"sede": franja.sede}
+        )
+        serializer.is_valid(raise_exception=True)
+        return Response(CapacidadFranjaSerializer(serializer.save()).data)
+
+    def delete(self, request, pk):
+        """Borrado lógico: la franja deja de aplicar y se puede volver a crear."""
+        franja = self._franja(request, pk)
+        if franja is None:
+            return Response(NO_ENCONTRADA_FRANJA, status=status.HTTP_404_NOT_FOUND)
+        franja.activa = False
+        franja.save(update_fields=["activa"])
+        return Response({"mensaje": "Franja eliminada correctamente."})

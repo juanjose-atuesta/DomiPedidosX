@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import ZonaCobertura
 from .models import CapacidadFranja
 from .services import validar_geometria
+from datetime import time
 
 
 class ZonaCoberturaSerializer(serializers.ModelSerializer):
@@ -91,6 +92,84 @@ class ZonaPublicaSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 class CapacidadFranjaSerializer(serializers.ModelSerializer):
+    """Tope de pedidos simultáneos de una franja de 1 hora (HU-9.2).
+
+    El operador envía `dia_semana`, `hora_inicio` (en punto) y
+    `max_pedidos_simultaneos`. `hora_fin` la calcula el servidor (inicio + 1 h).
+    La vista debe pasar la sede en el contexto: `context={"sede": sede}`.
+    """
+
+    sede_id = serializers.UUIDField(read_only=True)
+    hora_fin = serializers.TimeField(read_only=True)
+    max_pedidos_simultaneos = serializers.IntegerField(min_value=1)
+
     class Meta:
         model = CapacidadFranja
-        fields = ['id', 'sede', 'dia_semana', 'hora_inicio', 'hora_fin', 'tope_pedidos']
+        fields = (
+            "id",
+            "sede_id",
+            "dia_semana",
+            "hora_inicio",
+            "hora_fin",
+            "max_pedidos_simultaneos",
+            "activa",
+        )
+        read_only_fields = ("id", "sede_id", "hora_fin")
+
+    def validate_hora_inicio(self, value):
+        if value.minute or value.second or value.microsecond:
+            raise serializers.ValidationError(
+                "Las franjas son de 1 hora: la hora de inicio debe ser en punto "
+                "(por ejemplo 12:00)."
+            )
+        return value
+
+    def validate(self, data):
+        sede = self.context["sede"]
+        instancia = self.instance
+
+        def valor(campo, defecto=None):
+            if campo in data:
+                return data[campo]
+            return getattr(instancia, campo, defecto)
+
+        # El tope debe estar entre 1 y el tope general de la sede (HU-9.1).
+        tope_general = sede.tope_general_pedidos
+        if tope_general is None:
+            raise serializers.ValidationError(
+                {
+                    "max_pedidos_simultaneos": (
+                        "El administrador debe definir primero el tope general "
+                        "de la sede."
+                    )
+                }
+            )
+        tope = valor("max_pedidos_simultaneos")
+        if tope is not None and tope > tope_general:
+            raise serializers.ValidationError(
+                {
+                    "max_pedidos_simultaneos": (
+                        f"El tope de la franja no puede superar el tope general "
+                        f"de la sede ({tope_general})."
+                    )
+                }
+            )
+
+        # Franja de exactamente 1 hora. A las 23:00 termina al final del día.
+        inicio = valor("hora_inicio")
+        if inicio is not None:
+            data["hora_fin"] = time.max if inicio.hour == 23 else time(inicio.hour + 1)
+
+        # Una sola franja activa por sede, día y hora de inicio.
+        dia = valor("dia_semana")
+        if valor("activa", True) and inicio is not None and dia is not None:
+            repetidas = CapacidadFranja.objects.filter(
+                sede=sede, dia_semana=dia, hora_inicio=inicio, activa=True
+            )
+            if instancia is not None:
+                repetidas = repetidas.exclude(pk=instancia.pk)
+            if repetidas.exists():
+                raise serializers.ValidationError(
+                    {"detail": "Ya existe una franja para ese día y esa hora."}
+                )
+        return data
