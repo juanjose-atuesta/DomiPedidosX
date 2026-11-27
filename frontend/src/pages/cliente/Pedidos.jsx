@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import ClienteLayout from "../../layouts/ClienteLayout"
 import Boton from "../../components/Boton"
@@ -12,7 +11,7 @@ import { usePedidos } from "../../hooks/usePedidos"
 import { mensajeDeError } from "../../utils/errores"
 import { ETIQUETA_ESTADO, textoAviso, textoTipoPedido, tiempoEstimado } from "../../utils/pedidos"
 import { formatearFechaHora, moneda } from "../../utils/formato"
-import { ETIQUETA_ESTADO, textoTipoPedido } from "../../utils/pedidos"
+
 
 // El cliente espera ver cambiar su pedido: se consulta más seguido que en los paneles.
 const INTERVALO_MS = 10000
