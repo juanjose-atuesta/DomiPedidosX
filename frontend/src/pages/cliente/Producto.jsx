@@ -145,7 +145,7 @@ function DetalleProducto({ producto, sede }) {
         </div>
       </div>
 
-      <div className="fixed bottom-[22px] left-1/2 w-[calc(100%-32px)] max-w-[398px] -translate-x-1/2">
+      <div className="fixed bottom-0 left-1/2 z-20 w-full max-w-[430px] -translate-x-1/2 bg-fondo px-4 pb-[22px] pt-3">
         {aviso && (
           <MensajeAlerta tipo="exito" className="mb-2">
             {aviso}.{" "}
