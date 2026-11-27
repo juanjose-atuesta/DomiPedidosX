@@ -19,6 +19,7 @@ from apps.notificaciones.services import (
     crear_alerta_stock_bajo,
     notificar_cambio_estado,
     notificar_cancelacion,
+    notificar_cancelacion_a_sede,
     notificar_confirmacion,
 )
 from apps.promociones.services import (
@@ -29,6 +30,7 @@ from apps.promociones.services import (
 from apps.sedes.models import Feriado, Sede, SedeUsuario
 from apps.usuarios.models import Rol
 
+from .capacidad import MENSAJE_CAPACIDAD_LLENA, verificar_capacidad_sede
 from .models import (
     CanalPedido,
     DetallePedido,
@@ -276,6 +278,12 @@ def cambiar_estado_pedido(pedido_id, *, estado, usuario, comentario=""):
             )
 
         pedido.estado = estado
+        if estado == EstadoPedido.ENTREGADO:
+            pedido.ubicacion_repartidor_lat = None
+            pedido.ubicacion_repartidor_lng = None
+            pedido.ubicacion_actualizada_en = None
+            campos += ["ubicacion_repartidor_lat", "ubicacion_repartidor_lng", "ubicacion_actualizada_en"]
+
         pedido.save(update_fields=campos)
         HistorialEstado.objects.create(
             pedido=pedido,
@@ -396,6 +404,9 @@ def _cotizar(
         problemas.append(MENSAJE_FERIADO)
     elif not sede_abierta(sede, momento):
         problemas.append(_mensaje_sede_cerrada(sede, momento))
+    elif verificar_capacidad_sede(sede, momento).llena:
+        # HU-9.5: los pedidos ya confirmados siguen su curso; solo se frenan los nuevos.
+        problemas.append(MENSAJE_CAPACIDAD_LLENA)
 
     zona = None
     costo_domicilio = Decimal("0.00")
@@ -522,6 +533,9 @@ def crear_pedido(
     """
     with transaction.atomic():
         sede, detalles = _preparar(sede, sede_id, detalles, tipo)
+        # Bloquea la sede: dos pedidos simultáneos no pueden pasar ambos el
+        # último cupo de capacidad.
+        Sede.objects.select_for_update().filter(pk=sede.pk).first()
 
         if canal not in CanalPedido.values:
             raise ValueError("El canal del pedido no es valido.")
@@ -675,6 +689,9 @@ def cancelar_pedido(pedido_id, *, usuario, motivo="", por_sede=False):
             comentario=f"Rechazado por la sede: {motivo}" if por_sede else motivo,
         )
         notificar_cancelacion(pedido, por_sede=por_sede)
+        if not por_sede:
+            # HU-7.5: el operador se entera al instante de que ya no debe prepararlo.
+            notificar_cancelacion_a_sede(pedido)
         return pedido
 
 
@@ -751,3 +768,15 @@ def descontar_stock_pedido(pedido):
                 )
 
         return pedido
+
+def registrar_ubicacion_repartidor(pedido_id, *, usuario, latitud, longitud):
+    pedido = Pedido.objects.get(pk=pedido_id, repartidor=usuario)
+    if pedido.estado != EstadoPedido.EN_CAMINO:
+        raise ValueError("Solo se comparte la ubicación mientras el pedido está en camino.")
+    pedido.ubicacion_repartidor_lat = latitud
+    pedido.ubicacion_repartidor_lng = longitud
+    pedido.ubicacion_actualizada_en = timezone.now()
+    pedido.save(update_fields=[
+        "ubicacion_repartidor_lat", "ubicacion_repartidor_lng", "ubicacion_actualizada_en",
+    ])
+    return pedido

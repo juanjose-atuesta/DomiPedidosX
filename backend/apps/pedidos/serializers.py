@@ -271,5 +271,14 @@ class PedidoSerializer(serializers.ModelSerializer):
             "observaciones",
             "creado_en",
             "detalles",
+            "tiempo_estimado_entrega",
+            "ubicacion_repartidor_lat",
+            "ubicacion_repartidor_lng",
+            "ubicacion_actualizada_en",
+            "observaciones",
         )
         read_only_fields = fields
+
+class UbicacionRepartidorSerializer(serializers.Serializer):
+    latitud = serializers.FloatField(min_value=-90, max_value=90)
+    longitud = serializers.FloatField(min_value=-180, max_value=180)

@@ -6,6 +6,8 @@ import FormularioSede from "./pages/admin/FormularioSede"
 import ZonasSede from "./pages/admin/ZonasSede"
 import Feriados from "./pages/admin/Feriados"
 import Correos from "./pages/admin/Correos"
+import Capacidad from "./pages/admin/Capacidad"
+import ReporteVentasSedeZona from "./pages/admin/ReporteVentasSedeZona"
 import Categorias from "./pages/operador/Categorias"
 import Productos from "./pages/operador/Productos"
 import FormularioProducto from "./pages/operador/FormularioProducto"
@@ -36,6 +38,7 @@ import RegistroAdministrador from "./pages/auth/RegistroAdministrador"
 import RutaProtegida from "./routes/RutaProtegida"
 import Seguimiento from "./pages/cliente/Seguimiento"
 import Capacidad from "./pages/admin/Capacidad"
+import FranjasCapacidad from "./pages/admin/FranjasCapacidad"
 import { ROLES_POR_SECCION } from "./utils/roles"
 
 
@@ -62,6 +65,8 @@ export default function App() {
       <Route path="/cliente/pedidos" element={<Pedidos />} />
       <Route path="/cliente/seguimiento/:id" element={<Seguimiento />} />
       <Route path="/admin/sedes/:id/capacidad" element={<Capacidad />} />
+      <Route path="/admin/sedes/:id/capacidad" element={<FranjasCapacidad />} />
+
 
       {/* Administración */}
       <Route
@@ -128,7 +133,22 @@ export default function App() {
           </RutaProtegida>
         }
       />
-
+      <Route
+        path="/admin/capacidad"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <Capacidad />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/admin/reportes/ventas-sede-zona"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <ReporteVentasSedeZona />
+          </RutaProtegida>
+        }
+      />
       {/* Operación de sede */}
       <Route
         path="/operador/pedidos"

@@ -114,6 +114,9 @@ class Pedido(Timestamped):
     total = models.DecimalField(max_digits=10, decimal_places=2)
 
     tiempo_estimado_entrega = models.DateTimeField(null=True, blank=True)
+    ubicacion_repartidor_lat = models.FloatField(null=True, blank=True)
+    ubicacion_repartidor_lng = models.FloatField(null=True, blank=True)
+    ubicacion_actualizada_en = models.DateTimeField(null=True, blank=True)
     observaciones = models.TextField(blank=True)
     motivo_cancelacion = models.TextField(blank=True)
 

@@ -74,7 +74,7 @@ function TarjetaPedido({ pedido, procesando, onAvanzar }) {
 export default function TableroCocina() {
   const { sedes, cargando: cargandoSedes, error: errorSedes, esAdmin } = useSedesUsuario()
   const [sede, setSede] = useState(TODAS)
-  const { pedidos, cargando, error, procesandoId, avanzar } = usePedidos({
+  const { pedidos, cargando, error, procesandoId, avanzar, recargar } = usePedidos({
     sede: sede === TODAS ? "" : sede,
     estado: ESTADOS_TABLERO,
   })
@@ -82,7 +82,7 @@ export default function TableroCocina() {
   const sinSedes = !cargandoSedes && !esAdmin && sedes.length === 0
 
   return (
-    <AdminLayout titulo="Tablero de cocina">
+    <AdminLayout titulo="Tablero de cocina" onNotificacion={recargar}>
       {errorSedes && <MensajeAlerta tipo="error">{errorSedes}</MensajeAlerta>}
       {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
       {sinSedes && (

@@ -43,9 +43,11 @@ class SedeSerializer(serializers.ModelSerializer):
             "longitud",
             "activa",
             "asignacion_automatica_repartidor",
+            "tope_general_pedidos",
             "horarios",
         )
         read_only_fields = ("id", "activa")
+        extra_kwargs = {"tope_general_pedidos": {"min_value": 1}}
 
     def validate_horarios(self, value):
         try:

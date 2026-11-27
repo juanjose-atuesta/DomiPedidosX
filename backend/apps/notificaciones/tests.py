@@ -179,3 +179,181 @@ class ConfiguracionCorreosApiTests(APITestCase):
         operador = crear_usuario_prueba("op.cfg@example.com", Rol.OPERADOR)
         self.assertEqual(self.client.get(self.url, **auth_prueba(operador)).status_code, 403)
         self.assertEqual(self.client.get(self.url).status_code, 401)
+
+
+class NotificacionCancelacionOperadorTests(APITestCase):
+    """HU-7.5: el operador recibe una alerta cuando el cliente cancela."""
+
+    def setUp(self):
+        self.sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Centro", direccion="C1")
+        self.otra_sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Norte", direccion="N1")
+        habilitar_sede_para_pedidos(self.sede)
+        self.operador = crear_usuario_prueba("op.cancel@example.com", Rol.OPERADOR, sede=self.sede)
+        self.operador_otra = crear_usuario_prueba(
+            "op.norte@example.com", Rol.OPERADOR, sede=self.otra_sede
+        )
+        self.admin = crear_usuario_prueba("admin.cancel@example.com", Rol.ADMIN)
+        self.cliente = crear_usuario_prueba("cli.cancel@example.com", Rol.CLIENTE)
+        self.producto = producto_en_sede(self.sede)
+        self.url = reverse("notificacion_list")
+
+    def _pedido(self):
+        return crear_pedido(
+            sede=self.sede,
+            cliente=self.cliente,
+            detalles=[{"producto": self.producto, "cantidad": 1}],
+        )
+
+    def _cancelar(self, pedido, motivo="Me equivoqué de dirección"):
+        return self.client.post(
+            reverse("pedido_cancelar", args=[pedido.pk]),
+            {"motivo": motivo},
+            format="json",
+            **auth_prueba(self.cliente),
+        )
+
+    def _alertas(self):
+        return Notificacion.objects.filter(
+            tipo=TipoNotificacion.PEDIDO_CANCELADO, canal="sistema"
+        )
+
+    def test_cancelar_crea_alerta_para_la_sede_con_numero_y_hora(self):
+        from django.utils import timezone
+
+        pedido = self._pedido()
+
+        respuesta = self._cancelar(pedido)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        alerta = self._alertas().get()
+        pedido.refresh_from_db()
+        hora = timezone.localtime(pedido.actualizado_en)
+        self.assertEqual(alerta.sede, self.sede)
+        self.assertEqual(alerta.pedido, pedido)
+        self.assertIsNone(alerta.usuario)
+        self.assertFalse(alerta.leida)
+        self.assertIn(f"#{pedido.pk}", alerta.asunto)
+        self.assertIn(f"#{pedido.pk}", alerta.mensaje)
+        self.assertIn(f"{hora:%H:%M:%S}", alerta.mensaje)
+        self.assertIn("Me equivoqué de dirección", alerta.mensaje)
+
+    def test_el_rechazo_de_la_sede_no_genera_alerta_al_operador(self):
+        pedido = self._pedido()
+
+        rechazar_pedido(pedido.pk, usuario=self.operador, motivo="Sin ingredientes hoy")
+
+        self.assertFalse(self._alertas().exists())
+
+    def test_cancelacion_fallida_no_genera_alerta(self):
+        pedido = self._pedido()
+        cambiar_estado_pedido(pedido.pk, estado="en_preparacion", usuario=self.operador)
+
+        respuesta = self._cancelar(pedido)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(self._alertas().exists())
+
+    def test_operador_lista_alertas_de_su_sede(self):
+        pedido = self._pedido()
+        self._cancelar(pedido)
+
+        respuesta = self.client.get(self.url, **auth_prueba(self.operador))
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["no_leidas"], 1)
+        self.assertEqual(len(respuesta.data["resultados"]), 1)
+        alerta = respuesta.data["resultados"][0]
+        self.assertEqual(alerta["pedido_id"], pedido.pk)
+        self.assertEqual(alerta["tipo"], "pedido_cancelado")
+        self.assertEqual(alerta["sede_nombre"], "Centro")
+
+    def test_operador_de_otra_sede_no_ve_la_alerta(self):
+        self._cancelar(self._pedido())
+
+        respuesta = self.client.get(self.url, **auth_prueba(self.operador_otra))
+
+        self.assertEqual(respuesta.data["no_leidas"], 0)
+        self.assertEqual(respuesta.data["resultados"], [])
+
+    def test_admin_ve_las_alertas_de_su_negocio_y_filtra_por_sede(self):
+        self._cancelar(self._pedido())
+
+        todas = self.client.get(self.url, **auth_prueba(self.admin))
+        de_otra = self.client.get(
+            self.url, {"sede": str(self.otra_sede.pk)}, **auth_prueba(self.admin)
+        )
+
+        self.assertEqual(len(todas.data["resultados"]), 1)
+        self.assertEqual(de_otra.data["resultados"], [])
+
+    def test_los_correos_al_cliente_no_aparecen_en_el_panel(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self._pedido()  # deja un registro de correo de confirmación
+
+        respuesta = self.client.get(self.url, **auth_prueba(self.operador))
+
+        self.assertEqual(respuesta.data["resultados"], [])
+
+    def test_marcar_como_leida(self):
+        self._cancelar(self._pedido())
+        alerta = self._alertas().get()
+
+        respuesta = self.client.patch(
+            reverse("notificacion_detalle", args=[alerta.pk]),
+            {"leida": True, "mensaje": "intento de cambio"},
+            format="json",
+            **auth_prueba(self.operador),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        alerta.refresh_from_db()
+        self.assertTrue(alerta.leida)
+        self.assertNotEqual(alerta.mensaje, "intento de cambio")
+        no_leidas = self.client.get(self.url, {"leida": "false"}, **auth_prueba(self.operador))
+        self.assertEqual(no_leidas.data["no_leidas"], 0)
+        self.assertEqual(no_leidas.data["resultados"], [])
+
+    def test_no_se_marca_la_alerta_de_otra_sede(self):
+        self._cancelar(self._pedido())
+        alerta = self._alertas().get()
+
+        respuesta = self.client.patch(
+            reverse("notificacion_detalle", args=[alerta.pk]),
+            {"leida": True},
+            format="json",
+            **auth_prueba(self.operador_otra),
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_marcar_todas_como_leidas(self):
+        self._cancelar(self._pedido())
+        self._cancelar(self._pedido())
+
+        respuesta = self.client.post(
+            reverse("notificacion_marcar_leidas"), **auth_prueba(self.operador)
+        )
+
+        self.assertEqual(respuesta.data["marcadas"], 2)
+        self.assertFalse(self._alertas().filter(leida=False).exists())
+
+    def test_solo_personal_de_panel(self):
+        self.assertEqual(self.client.get(self.url, **auth_prueba(self.cliente)).status_code, 403)
+        self.assertEqual(self.client.get(self.url).status_code, 401)
+
+    def test_el_cancelado_sale_de_entrantes_y_del_tablero(self):
+        cancelado = self._pedido()
+        activo = self._pedido()
+        self._cancelar(cancelado)
+
+        entrantes = self.client.get(
+            reverse("pedido_list_create"), {"estado": "recibido"}, **auth_prueba(self.operador)
+        )
+        tablero = self.client.get(
+            reverse("pedido_list_create"),
+            {"estado": "recibido,en_preparacion,listo_despacho"},
+            **auth_prueba(self.operador),
+        )
+
+        self.assertEqual([p["id"] for p in entrantes.data], [activo.pk])
+        self.assertEqual([p["id"] for p in tablero.data], [activo.pk])

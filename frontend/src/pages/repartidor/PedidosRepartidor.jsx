@@ -6,6 +6,7 @@ import { usePedidos } from "../../hooks/usePedidos"
 import { useSedesUsuario } from "../../hooks/useSedesUsuario"
 import { formatearHora, moneda } from "../../utils/formato"
 import { ETIQUETA_ESTADO, accionEstado } from "../../utils/pedidos"
+import { useCompartirUbicacion } from "../../hooks/useCompartirUbicacion"
 
 const SECCIONES = [
   { estado: "en_camino", titulo: "En camino", vacio: "No llevas pedidos en camino" },
@@ -22,6 +23,7 @@ function textoAccion(estado, asignado) {
 
 function TarjetaEntrega({ pedido, procesando, onAvanzar, usuarioId }) {
   const asignado = pedido.repartidor_id === usuarioId
+  useCompartirUbicacion(pedido.id, pedido.estado === "en_camino" && asignado)
   return (
     <article className="flex flex-col gap-3 rounded-xl border border-borde bg-white p-4">
       <div className="flex items-start justify-between gap-2">

@@ -13,7 +13,7 @@ import { formatearFechaHora, moneda } from "../../utils/formato"
 import { ETIQUETA_ESTADO, textoTipoPedido } from "../../utils/pedidos"
 
 // El cliente espera ver cambiar su pedido: se consulta más seguido que en los paneles.
-const INTERVALO_MS = 10000
+const INTERVALO_MS = 5000
 
 function Fila({ etiqueta, valor }) {
   return (
