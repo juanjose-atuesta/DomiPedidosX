@@ -7,6 +7,7 @@ import ZonasSede from "./pages/admin/ZonasSede"
 import Feriados from "./pages/admin/Feriados"
 import Correos from "./pages/admin/Correos"
 import Capacidad from "./pages/admin/Capacidad"
+import ReporteVentasSedeZona from "./pages/admin/ReporteVentasSedeZona"
 import Categorias from "./pages/operador/Categorias"
 import Productos from "./pages/operador/Productos"
 import FormularioProducto from "./pages/operador/FormularioProducto"
@@ -131,7 +132,14 @@ export default function App() {
           </RutaProtegida>
         }
       />
-
+      <Route
+        path="/admin/reportes/ventas-sede-zona"
+        element={
+          <RutaProtegida roles={ADMIN}>
+            <ReporteVentasSedeZona />
+          </RutaProtegida>
+        }
+      />
       {/* Operación de sede */}
       <Route
         path="/operador/pedidos"
