@@ -181,7 +181,7 @@ export default function Pedidos() {
   const [aAsignar, setAAsignar] = useState(null)
   const [mensaje, setMensaje] = useState(location.state?.mensaje ?? "")
   const [version, setVersion] = useState(0)
-  const { pedidos, cargando, error, procesandoId, avanzar, reemplazar } = usePedidos({
+  const { pedidos, cargando, error, procesandoId, avanzar, reemplazar, recargar } = usePedidos({
     sede: sede === TODOS ? "" : sede,
     estado: estado === TODOS ? "" : estado,
     fecha,
@@ -203,6 +203,7 @@ export default function Pedidos() {
   return (
     <AdminLayout
       titulo="Pedidos"
+      onNotificacion={recargar}
       accion={<Boton onClick={() => navigate("/operador/pedidos/nuevo")}>Nuevo pedido</Boton>}
     >
       {mensaje && <MensajeAlerta tipo="exito">{mensaje}</MensajeAlerta>}

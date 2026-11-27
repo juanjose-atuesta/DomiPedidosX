@@ -67,6 +67,49 @@ def crear_alerta_sin_repartidor(pedido):
     )
 
 
+def notificar_cancelacion_a_sede(pedido):
+    """Alerta de panel para el operador: el cliente canceló su pedido (HU-7.5).
+
+    Va dirigida a la sede (sin usuario), así la ve cualquier operador de ella.
+    Incluye el número de pedido y la hora exacta de la cancelación.
+    """
+    cancelado_en = timezone.localtime(pedido.actualizado_en or timezone.now())
+    return Notificacion.objects.create(
+        sede=pedido.sede,
+        pedido=pedido,
+        tipo=TipoNotificacion.PEDIDO_CANCELADO,
+        canal=CanalNotificacion.SISTEMA,
+        asunto=f"Pedido #{pedido.pk} cancelado por el cliente",
+        mensaje=(
+            f"El cliente canceló el pedido #{pedido.pk} de {pedido.sede.nombre} "
+            f"a las {cancelado_en:%H:%M:%S} del {cancelado_en:%d/%m/%Y}. "
+            f"Motivo: {pedido.motivo_cancelacion}"
+        ),
+    )
+
+
+def notificaciones_visibles_para(usuario):
+    """Alertas de panel que ve el personal: las de sus sedes y las suyas propias.
+
+    El admin ve las de todas las sedes de su negocio; operador y cocina, las de
+    las sedes donde están asignados.
+    """
+    from django.db.models import Q
+
+    from apps.sedes.models import Sede, SedeUsuario
+    from apps.usuarios.models import Rol
+
+    if usuario.rol == Rol.ADMIN:
+        sedes = Sede.objects.filter(negocio_id=usuario.negocio_id).values("pk")
+    else:
+        sedes = SedeUsuario.objects.filter(
+            usuario=usuario, sede__negocio_id=usuario.negocio_id
+        ).values("sede")
+    return Notificacion.objects.filter(canal=CanalNotificacion.SISTEMA).filter(
+        Q(usuario=usuario) | Q(usuario__isnull=True, sede__in=sedes)
+    )
+
+
 def configuracion_correos(negocio_id):
     """Configuración del negocio; sin fila, todos los eventos están activos."""
     return ConfiguracionCorreos.objects.filter(negocio_id=negocio_id).first() or (

@@ -7,6 +7,8 @@ const ENLACES = [
   { texto: "Sedes", ruta: "/admin/sedes", roles: ["admin"] },
   { texto: "Feriados", ruta: "/admin/feriados", roles: ["admin"] },
   { texto: "Correos", ruta: "/admin/correos", roles: ["admin"] },
+  { texto: "Capacidad", ruta: "/admin/capacidad", roles: ["admin"] },
+  { texto: "Ventas por sede y zona", ruta: "/admin/reportes/ventas-sede-zona", roles: ["admin"] },
   { texto: "Pedidos", ruta: "/operador/pedidos", roles: ["operador", "admin"] },
   { texto: "Tablero de cocina", ruta: "/cocina", roles: ["cocina", "operador", "admin"] },
   { texto: "Categorías", ruta: "/operador/categorias", roles: ["operador", "admin"] },
@@ -22,7 +24,7 @@ export default function BarraLateral() {
   const enlaces = ENLACES.filter(({ roles }) => tieneRol(usuario, roles))
 
   return (
-    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-[10px] bg-vino p-4">
+    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-[10px] overflow-y-auto bg-vino p-4">
       <p className="font-titulo text-[28px] font-semibold leading-9 text-white">DomiPedidosX</p>
       {usuario?.negocio && (
         <p className="truncate text-sm text-white/80">{usuario.negocio.nombre}</p>
