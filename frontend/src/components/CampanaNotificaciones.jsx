@@ -12,7 +12,7 @@ const INTERVALO_MS = 5000
 // Campana del panel del personal: consulta las alertas cada 5 s (HU-7.5).
 // `onNuevas` se llama cuando llegan alertas que no se habían visto, para que la
 // vista recargue sus pedidos (un cancelado sale de entrantes y del tablero).
-export default function CampanaNotificaciones({ onNuevas }) {
+export default function CampanaNotificaciones({ onNuevas, intervalo = INTERVALO_MS }) {
   const [datos, setDatos] = useState({ no_leidas: 0, resultados: [] })
   const [abierta, setAbierta] = useState(false)
   const vistas = useRef(null)
@@ -40,12 +40,12 @@ export default function CampanaNotificaciones({ onNuevas }) {
         })
 
     cargar()
-    const temporizador = setInterval(cargar, INTERVALO_MS)
+    const temporizador = setInterval(cargar, intervalo)
     return () => {
       vigente = false
       clearInterval(temporizador)
     }
-  }, [])
+  }, [intervalo])
 
   const marcar = async (notificacion) => {
     if (notificacion.leida) return
