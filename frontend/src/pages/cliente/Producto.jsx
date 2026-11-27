@@ -93,7 +93,7 @@ function DetalleProducto({ producto, sede }) {
   return (
     <div className="flex min-h-screen justify-center bg-fondo">
       <div className="relative w-full max-w-[430px] pb-44">
-        <div className="relative h-[325px] bg-borde">
+        <div className="sticky top-0 h-[325px] bg-borde">
           {foto ? (
             <img src={foto} alt={producto.nombre} className="h-full w-full object-cover" />
           ) : (
@@ -111,7 +111,7 @@ function DetalleProducto({ producto, sede }) {
           </button>
         </div>
 
-        <div className="relative -mt-10 rounded-t-[32px] bg-fondo px-[33px] pt-9">
+        <div className="relative z-10 -mt-10 rounded-t-[32px] bg-fondo px-[33px] pt-9">
           <div className="flex flex-col gap-3">
             <h1 className="font-titulo text-[28px] font-semibold leading-9 text-black">
               {producto.nombre}
@@ -145,7 +145,7 @@ function DetalleProducto({ producto, sede }) {
         </div>
       </div>
 
-      <div className="fixed bottom-[22px] left-1/2 w-[calc(100%-32px)] max-w-[398px] -translate-x-1/2">
+      <div className="fixed bottom-0 left-1/2 z-20 w-full max-w-[430px] -translate-x-1/2 bg-fondo px-4 pb-[22px] pt-3">
         {aviso && (
           <MensajeAlerta tipo="exito" className="mb-2">
             {aviso}.{" "}
