@@ -14,6 +14,9 @@ from .models import ZonaCobertura
 from .serializers import ZonaCoberturaSerializer, ZonaPublicaSerializer
 from .services import zonas_que_cubren
 
+from .serializers import CapacidadFranjaSerializer
+from .models import CapacidadFranja
+
 NO_ENCONTRADA = {"detail": "Zona no encontrada."}
 
 
@@ -140,3 +143,16 @@ def _es_uuid(valor):
     except ValueError:
         return False
     return True
+
+class CapacidadSedeView(APIView):
+    permission_classes = [EsAdmin | EsOperador]
+
+    def get(self, request, sede_id):
+        franjas = CapacidadFranja.objects.filter(sede_id=sede_id).order_by('dia_semana', 'hora_inicio')
+        return Response(CapacidadFranjaSerializer(franjas, many=True).data)
+
+    def post(self, request, sede_id):
+        serializer = CapacidadFranjaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(sede_id=sede_id)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

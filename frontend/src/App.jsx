@@ -36,7 +36,11 @@ import Producto from "./pages/cliente/Producto"
 import RegistroRestaurante from "./pages/auth/RegistroRestaurante"
 import RegistroAdministrador from "./pages/auth/RegistroAdministrador"
 import RutaProtegida from "./routes/RutaProtegida"
+import Seguimiento from "./pages/cliente/Seguimiento"
+import Capacidad from "./pages/admin/Capacidad"
+import FranjasCapacidad from "./pages/admin/FranjasCapacidad"
 import { ROLES_POR_SECCION } from "./utils/roles"
+
 
 const ADMIN = ROLES_POR_SECCION["/admin"]
 const OPERADOR = ROLES_POR_SECCION["/operador"]
@@ -58,6 +62,11 @@ export default function App() {
       <Route path="/registro" element={<Registro />} />
       <Route path="/registro-restaurante" element={<RegistroRestaurante />} />
       <Route path="/registro-administrador" element={<RegistroAdministrador />} />
+      <Route path="/cliente/pedidos" element={<Pedidos />} />
+      <Route path="/cliente/seguimiento/:id" element={<Seguimiento />} />
+      <Route path="/admin/sedes/:id/capacidad" element={<Capacidad />} />
+      <Route path="/admin/sedes/:id/capacidad" element={<FranjasCapacidad />} />
+
 
       {/* Administración */}
       <Route

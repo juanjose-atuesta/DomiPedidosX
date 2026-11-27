@@ -16,7 +16,6 @@ function validarPorcentaje(texto) {
   return ""
 }
 
-// Porcentaje de ocupación a partir del cual se alerta a las sedes (HU-9.3).
 export default function Capacidad() {
   const [config, setConfig] = useState(null)
   const [valor, setValor] = useState("")
@@ -36,9 +35,7 @@ export default function Capacidad() {
       .catch((err) => {
         if (vigente) setError(mensajeDeError(err, "No se pudo cargar la configuración."))
       })
-    return () => {
-      vigente = false
-    }
+    return () => { vigente = false }
   }, [])
 
   const guardar = async (evento) => {

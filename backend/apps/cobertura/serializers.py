@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import ZonaCobertura
+from .models import CapacidadFranja
 from .services import validar_geometria
 
 
@@ -88,3 +89,8 @@ class ZonaPublicaSerializer(serializers.ModelSerializer):
             "tiempo_estimado_min",
         )
         read_only_fields = fields
+
+class CapacidadFranjaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CapacidadFranja
+        fields = ['id', 'sede', 'dia_semana', 'hora_inicio', 'hora_fin', 'tope_pedidos']

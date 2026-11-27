@@ -132,6 +132,13 @@ export default function Pedidos() {
               Cancelar pedido
             </Boton>
           )}
+
+          {(pedido.estado === "en_camino" || pedido.estado === "en_preparacion") && (
+            <Boton anchoCompleto onClick={() => navigate(`/cliente/seguimiento/${pedido.id}`)}>
+              Ver seguimiento en mapa
+            </Boton>
+          )}
+          
         </article>
       ))}
 
