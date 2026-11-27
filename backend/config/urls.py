@@ -11,6 +11,8 @@ urlpatterns = [
     path("api/auth/", include("apps.usuarios.auth_urls")),
     # Tus endpoints y los de los demás en usuarios
     path("api/usuarios/", include("apps.usuarios.urls")),
+    # Configuración del negocio (porcentaje de alerta de capacidad)
+    path("api/negocios/", include("apps.negocios.urls")),
     # Gestión de sedes y sus horarios de atención
     path("api/sedes/", include("apps.sedes.urls")),
     # Catálogo del menú: categorías, productos y grupos de opciones
@@ -27,4 +29,6 @@ urlpatterns = [
     path("api/repartos/", include("apps.repartos.urls")),
     # Configuración de correos por evento
     path("api/notificaciones/", include("apps.notificaciones.urls")),
+    # Reportes del administrador
+    path("api/reportes/", include("apps.reportes.urls")),
 ]

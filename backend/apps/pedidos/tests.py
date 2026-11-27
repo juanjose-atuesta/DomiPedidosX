@@ -1331,3 +1331,195 @@ class RechazoPedidoTests(_BaseCheckout):
                     self._rechazar(pedido_id, "Motivo suficientemente largo", usuario).status_code,
                     status.HTTP_403_FORBIDDEN,
                 )
+
+
+class CapacidadSedeTests(APITestCase):
+    """HU-9.5: no se confirman pedidos nuevos cuando la sede está llena."""
+
+    def setUp(self):
+        from apps.core.datos_prueba import crear_usuario_prueba, negocio_prueba, producto_en_sede
+
+        self.sede = Sede.objects.create(negocio=negocio_prueba(), nombre="Centro", direccion="C1")
+        self.otra = Sede.objects.create(negocio=negocio_prueba(), nombre="Norte", direccion="N1")
+        habilitar_sede_para_pedidos(self.sede)
+        habilitar_sede_para_pedidos(self.otra)
+        self.cliente = crear_usuario_prueba("cli.cap@example.com", Rol.CLIENTE)
+        self.cocina = crear_usuario_prueba("coc.cap@example.com", Rol.COCINA, sede=self.sede)
+        self.producto = producto_en_sede(self.sede)
+        self.producto_otra = producto_en_sede(self.otra, nombre="Perro")
+
+    def _franja(self, tope, **extra):
+        from datetime import time
+
+        from apps.cobertura.models import CapacidadFranja
+
+        datos = {"hora_inicio": time(0, 0), "hora_fin": time(23, 59, 59, 999999), **extra}
+        return [
+            CapacidadFranja.objects.create(
+                sede=self.sede,
+                dia_semana=dia,
+                max_pedidos_simultaneos=tope,
+                **datos,
+            )
+            for dia in range(1, 8)
+        ]
+
+    def _pedido(self, sede=None):
+        sede = sede or self.sede
+        producto = self.producto if sede == self.sede else self.producto_otra
+        return crear_pedido(
+            sede=sede, cliente=self.cliente, detalles=[{"producto": producto, "cantidad": 1}]
+        )
+
+    def _post(self, url_name="pedido_list_create"):
+        from apps.core.datos_prueba import auth_prueba
+
+        return self.client.post(
+            reverse(url_name),
+            {
+                "sede_id": str(self.sede.pk),
+                "tipo": "recoger",
+                "detalles": [{"producto_id": str(self.producto.pk), "cantidad": 1}],
+            },
+            format="json",
+            **auth_prueba(self.cliente),
+        )
+
+    def test_sin_tope_configurado_se_permite(self):
+        from .capacidad import verificar_capacidad_sede
+
+        for _ in range(5):
+            self._pedido()
+
+        capacidad = verificar_capacidad_sede(self.sede)
+        self.assertIsNone(capacidad.tope)
+        self.assertFalse(capacidad.llena)
+        self.assertEqual(self._post().status_code, status.HTTP_201_CREATED)
+
+    def test_bloquea_al_llegar_al_tope_con_mensaje_exacto(self):
+        self._franja(2)
+        self._pedido()
+        self._pedido()
+
+        respuesta = self._post()
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(respuesta.data["detail"], "La sede alcanzó su capacidad")
+        self.assertEqual(Pedido.objects.filter(sede=self.sede).count(), 2)
+
+    def test_por_debajo_del_tope_se_permite(self):
+        self._franja(2)
+        self._pedido()
+
+        self.assertEqual(self._post().status_code, status.HTTP_201_CREATED)
+
+    def test_cotizar_avisa_que_no_se_puede_confirmar(self):
+        self._franja(1)
+        self._pedido()
+
+        respuesta = self._post("pedido_cotizar")
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertFalse(respuesta.data["puede_confirmar"])
+        self.assertIn("La sede alcanzó su capacidad", respuesta.data["problemas"])
+
+    def test_no_afecta_a_los_pedidos_ya_confirmados(self):
+        self._franja(2)
+        primero = self._pedido()
+        segundo = self._pedido()
+        self.assertEqual(self._post().status_code, status.HTTP_400_BAD_REQUEST)
+
+        cambiar_estado_pedido(primero.pk, estado="en_preparacion", usuario=self.cocina)
+        cambiar_estado_pedido(segundo.pk, estado="en_preparacion", usuario=self.cocina)
+        cambiar_estado_pedido(segundo.pk, estado="listo_despacho", usuario=self.cocina)
+
+        primero.refresh_from_db()
+        segundo.refresh_from_db()
+        self.assertEqual(primero.estado, "en_preparacion")
+        self.assertEqual(segundo.estado, "listo_despacho")
+
+    def test_reabre_al_bajar_del_tope(self):
+        self._franja(2)
+        primero = self._pedido()
+        self._pedido()
+        self.assertEqual(self._post().status_code, status.HTTP_400_BAD_REQUEST)
+
+        cambiar_estado_pedido(primero.pk, estado="en_preparacion", usuario=self.cocina)
+        self.assertEqual(self._post().status_code, status.HTTP_400_BAD_REQUEST)
+        cambiar_estado_pedido(primero.pk, estado="listo_despacho", usuario=self.cocina)
+
+        self.assertEqual(self._post().status_code, status.HTTP_201_CREATED)
+
+    def test_reabre_cuando_el_cliente_cancela(self):
+        from .services import cancelar_pedido
+
+        self._franja(1)
+        pedido = self._pedido()
+        self.assertEqual(self._post().status_code, status.HTTP_400_BAD_REQUEST)
+
+        cancelar_pedido(pedido.pk, usuario=self.cliente)
+
+        self.assertEqual(self._post().status_code, status.HTTP_201_CREATED)
+
+    def test_tope_general_de_la_sede_si_no_hay_franja(self):
+        from .capacidad import verificar_capacidad_sede
+
+        self.sede.tope_general_pedidos = 1
+        self.sede.save(update_fields=["tope_general_pedidos"])
+        self._pedido()
+
+        capacidad = verificar_capacidad_sede(self.sede)
+        self.assertEqual((capacidad.origen, capacidad.tope, capacidad.en_curso), ("general", 1, 1))
+        self.assertEqual(self._post().data["detail"], "La sede alcanzó su capacidad")
+
+    def test_la_franja_tiene_prioridad_sobre_el_tope_general(self):
+        from .capacidad import verificar_capacidad_sede
+
+        self.sede.tope_general_pedidos = 1
+        self.sede.save(update_fields=["tope_general_pedidos"])
+        self._franja(3)
+        self._pedido()
+
+        capacidad = verificar_capacidad_sede(self.sede)
+        self.assertEqual((capacidad.origen, capacidad.tope), ("franja", 3))
+        self.assertEqual(self._post().status_code, status.HTTP_201_CREATED)
+
+    def test_franja_inactiva_no_cuenta(self):
+        from apps.cobertura.models import CapacidadFranja
+
+        self._franja(1)
+        CapacidadFranja.objects.update(activa=False)
+        self._pedido()
+
+        self.assertEqual(self._post().status_code, status.HTTP_201_CREATED)
+
+    def test_solo_cuenta_pedidos_de_la_franja_actual_y_de_la_sede(self):
+        from datetime import time, timedelta
+
+        from django.utils import timezone
+
+        from .capacidad import verificar_capacidad_sede
+
+        ahora = timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0)
+        self._franja(1, hora_inicio=time(11), hora_fin=time(14))
+        antiguo = self._pedido()
+        Pedido.objects.filter(pk=antiguo.pk).update(creado_en=ahora - timedelta(hours=3))
+        en_otra_sede = self._pedido(self.otra)
+        Pedido.objects.filter(pk=en_otra_sede.pk).update(creado_en=ahora)
+
+        capacidad = verificar_capacidad_sede(self.sede, ahora)
+
+        self.assertEqual((capacidad.tope, capacidad.en_curso), (1, 0))
+        self.assertFalse(capacidad.llena)
+
+        en_franja = self._pedido()
+        Pedido.objects.filter(pk=en_franja.pk).update(creado_en=ahora - timedelta(minutes=30))
+        self.assertTrue(verificar_capacidad_sede(self.sede, ahora).llena)
+        # Fuera del horario de la franja no hay tope vigente.
+        self.assertIsNone(verificar_capacidad_sede(self.sede, ahora.replace(hour=16)).tope)
+
+    def test_tope_general_invalido(self):
+        from django.db import IntegrityError, transaction
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Sede.objects.filter(pk=self.sede.pk).update(tope_general_pedidos=0)

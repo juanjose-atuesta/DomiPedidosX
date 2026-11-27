@@ -18,6 +18,17 @@ class Sede(ModeloUUID):
     # HU-6.6: al quedar listo un domicilio, se asigna solo al repartidor
     # disponible con menos pedidos en el día.
     asignacion_automatica_repartidor = models.BooleanField(default=False)
+    # HU-9.5: tope de pedidos en curso cuando no hay una franja de capacidad
+    # vigente (las franjas llegan con HU-9.1/9.2). NULL = sin tope.
+    tope_general_pedidos = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(tope_general_pedidos__isnull=True) | Q(tope_general_pedidos__gt=0),
+                name="ck_sede_tope_general_positivo",
+            ),
+        ]
 
     def __str__(self):
         return self.nombre

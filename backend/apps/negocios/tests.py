@@ -511,3 +511,109 @@ class AislamientoEscrituraTests(DatosDosNegocios):
                 self.cliente,
             )
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+
+class PorcentajeAlertaCapacidadTests(APITestCase):
+    """HU-9.3: el admin configura el % de alerta de capacidad de su negocio."""
+
+    def setUp(self):
+        from datetime import time
+
+        from apps.cobertura.models import CapacidadFranja
+        from apps.core.datos_prueba import auth_prueba, crear_usuario_prueba
+
+        self.auth = auth_prueba
+        self.url = reverse("configuracion_capacidad")
+        self.negocio = Negocio.objects.create(nombre="Pizzería")
+        self.otro = Negocio.objects.create(nombre="Otro")
+        self.admin = crear_usuario_prueba("admin.cap@example.com", Rol.ADMIN)
+        self.admin.negocio = self.negocio
+        self.admin.save(update_fields=["negocio"])
+        self.operador = crear_usuario_prueba("op.cap@example.com", Rol.OPERADOR)
+        self.sedes = [
+            Sede.objects.create(negocio=self.negocio, nombre=n, direccion="D")
+            for n in ("Centro", "Norte")
+        ]
+        self.sede_otro = Sede.objects.create(negocio=self.otro, nombre="Ajena", direccion="D")
+        self.franjas = [
+            CapacidadFranja.objects.create(
+                sede=sede,
+                dia_semana=1,
+                hora_inicio=time(12),
+                hora_fin=time(15),
+                max_pedidos_simultaneos=10,
+            )
+            for sede in (*self.sedes, self.sede_otro)
+        ]
+
+    def _patch(self, datos, usuario=None):
+        return self.client.patch(
+            self.url, datos, format="json", **self.auth(usuario or self.admin)
+        )
+
+    def test_por_defecto_es_80(self):
+        self.assertEqual(self.negocio.porcentaje_alerta_capacidad, 80)
+
+        respuesta = self.client.get(self.url, **self.auth(self.admin))
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["porcentaje_alerta_capacidad"], 80)
+        self.assertEqual(respuesta.data["sedes_afectadas"], 2)
+
+    def test_admin_edita_y_aplica_a_todas_sus_sedes(self):
+        from apps.negocios.services import porcentaje_alerta_de_sede
+
+        respuesta = self._patch({"porcentaje_alerta_capacidad": 65})
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+        self.assertEqual(respuesta.data["porcentaje_alerta_capacidad"], 65)
+        self.negocio.refresh_from_db()
+        self.assertEqual(self.negocio.porcentaje_alerta_capacidad, 65)
+        for sede in self.sedes:
+            sede.refresh_from_db()
+            self.assertEqual(porcentaje_alerta_de_sede(sede), 65)
+        for franja in self.franjas[:2]:
+            franja.refresh_from_db()
+            self.assertEqual(franja.umbral_alerta_pct, 65)
+
+    def test_no_afecta_a_otro_negocio(self):
+        self._patch({"porcentaje_alerta_capacidad": 50})
+
+        self.otro.refresh_from_db()
+        self.franjas[2].refresh_from_db()
+        self.assertEqual(self.otro.porcentaje_alerta_capacidad, 80)
+        self.assertEqual(self.franjas[2].umbral_alerta_pct, 80)
+
+    def test_limites_validos(self):
+        for valor in (1, 100):
+            with self.subTest(valor=valor):
+                self.assertEqual(
+                    self._patch({"porcentaje_alerta_capacidad": valor}).status_code, 200
+                )
+
+    def test_rechaza_fuera_de_rango_o_no_entero(self):
+        for valor in (0, 101, -5, "abc", 50.5):
+            with self.subTest(valor=valor):
+                respuesta = self._patch({"porcentaje_alerta_capacidad": valor})
+                self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+        self.negocio.refresh_from_db()
+        self.assertEqual(self.negocio.porcentaje_alerta_capacidad, 80)
+
+    def test_mensaje_de_rango(self):
+        respuesta = self._patch({"porcentaje_alerta_capacidad": 150})
+
+        self.assertIn(
+            "El porcentaje debe estar entre 1 y 100.",
+            respuesta.data["porcentaje_alerta_capacidad"],
+        )
+
+    def test_la_base_de_datos_impide_valores_invalidos(self):
+        from django.db import IntegrityError, transaction
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Negocio.objects.filter(pk=self.negocio.pk).update(porcentaje_alerta_capacidad=0)
+
+    def test_solo_el_admin(self):
+        self.assertEqual(self.client.get(self.url, **self.auth(self.operador)).status_code, 403)
+        self.assertEqual(self._patch({"porcentaje_alerta_capacidad": 50}, self.operador).status_code, 403)
+        self.assertEqual(self.client.get(self.url).status_code, 401)
