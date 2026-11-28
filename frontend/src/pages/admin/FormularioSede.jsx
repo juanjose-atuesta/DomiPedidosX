@@ -23,6 +23,7 @@ const FORMULARIO_VACIO = {
   direccion: "",
   latitud: "",
   longitud: "",
+  topeGeneral: "",
   asignacionAutomatica: false,
 }
 
@@ -58,6 +59,7 @@ export default function FormularioSede() {
           direccion: datos.direccion ?? "",
           latitud: datos.latitud ?? "",
           longitud: datos.longitud ?? "",
+          topeGeneral: datos.tope_general_pedidos ?? "",
           asignacionAutomatica: Boolean(datos.asignacion_automatica_repartidor),
         })
         setHorarios(
@@ -116,6 +118,7 @@ export default function FormularioSede() {
         direccion: formulario.direccion.trim(),
         latitud: formulario.latitud === "" ? null : formulario.latitud,
         longitud: formulario.longitud === "" ? null : formulario.longitud,
+        tope_general_pedidos: formulario.topeGeneral === "" ? null : formulario.topeGeneral,
         asignacion_automatica_repartidor: formulario.asignacionAutomatica,
         horarios: horarios.map((horario) => ({
           dia_semana: Number(horario.dia_semana),
@@ -204,6 +207,16 @@ export default function FormularioSede() {
                 placeholder="Ej. -76.5320"
                 value={formulario.longitud}
                 onChange={actualizarCampo("longitud")}
+              />
+              <CampoTexto
+                etiqueta="Tope general de pedidos simultáneos"
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                placeholder="Sin tope"
+                value={formulario.topeGeneral}
+                onChange={actualizarCampo("topeGeneral")}
               />
             </div>
 

@@ -36,8 +36,7 @@ import Producto from "./pages/cliente/Producto"
 import RegistroRestaurante from "./pages/auth/RegistroRestaurante"
 import RegistroAdministrador from "./pages/auth/RegistroAdministrador"
 import RutaProtegida from "./routes/RutaProtegida"
-import Seguimiento from "./pages/cliente/Seguimiento"
-import Capacidad from "./pages/admin/Capacidad"
+//import Seguimiento from "./pages/cliente/Seguimiento"
 import FranjasCapacidad from "./pages/admin/FranjasCapacidad"
 import { ROLES_POR_SECCION } from "./utils/roles"
 
@@ -63,9 +62,7 @@ export default function App() {
       <Route path="/registro-restaurante" element={<RegistroRestaurante />} />
       <Route path="/registro-administrador" element={<RegistroAdministrador />} />
       <Route path="/cliente/pedidos" element={<Pedidos />} />
-      <Route path="/cliente/seguimiento/:id" element={<Seguimiento />} />
-      <Route path="/admin/sedes/:id/capacidad" element={<Capacidad />} />
-      <Route path="/admin/sedes/:id/capacidad" element={<FranjasCapacidad />} />
+      {/* <Route path="/cliente/seguimiento/:id" element={<Seguimiento />} /> */}
 
 
       {/* Administración */}
@@ -149,6 +146,14 @@ export default function App() {
           </RutaProtegida>
         }
       />
+      <Route
+        path="/operador/capacidad"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <FranjasCapacidad />
+          </RutaProtegida>
+        }
+      />
       {/* Operación de sede */}
       <Route
         path="/operador/pedidos"
@@ -227,6 +232,14 @@ export default function App() {
         element={
           <RutaProtegida roles={OPERADOR}>
             <Inventario />
+          </RutaProtegida>
+        }
+      />
+      <Route
+        path="/operador/capacidad"
+        element={
+          <RutaProtegida roles={OPERADOR}>
+            <FranjasCapacidad />
           </RutaProtegida>
         }
       />

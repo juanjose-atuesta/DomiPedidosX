@@ -15,6 +15,7 @@ const ENLACES = [
   { texto: "Productos", ruta: "/operador/productos", roles: ["operador", "admin"] },
   { texto: "Promociones", ruta: "/operador/promociones", roles: ["operador", "admin"] },
   { texto: "Inventario", ruta: "/operador/inventario", roles: ["operador", "admin"] },
+  { texto: "Franjas de capacidad", ruta: "/operador/capacidad", roles: ["operador"] },
 ]
 
 const BASE = "flex w-full items-center rounded-lg px-4 py-3 text-base font-semibold"
