@@ -12,6 +12,7 @@ from django.utils import timezone
 from apps.notificaciones.services import (
     crear_alerta_sin_repartidor,
     notificar_asignacion,
+    notificar_repartidor_asignado,
 )
 from apps.pedidos.models import EstadoPedido, HistorialEstado, Pedido, TipoPedido
 from apps.usuarios.models import PerfilRepartidor, Rol, User
@@ -104,6 +105,7 @@ def _registrar_asignacion(pedido, repartidor, *, asignado_por, automatico):
         comentario=f"Repartidor {repartidor.nombre_completo} asignado {modo}.",
     )
     notificar_asignacion(pedido)
+    notificar_repartidor_asignado(pedido)    # aviso al repartidor (HU-7.6)
     return pedido
 
 

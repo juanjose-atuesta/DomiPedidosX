@@ -88,16 +88,44 @@ def notificar_cancelacion_a_sede(pedido):
     )
 
 
+def notificar_repartidor_asignado(pedido):
+    """Aviso de panel al repartidor al que se asigna un pedido (HU-7.6).
+
+    Va dirigido al repartidor (usuario) e incluye número de pedido y dirección
+    de entrega. Se crea en la misma transacción de la asignación, así aparece
+    de inmediato (criterio: máximo 5 segundos) y, si la asignación se revierte,
+    no queda ningún aviso.
+    """
+    return Notificacion.objects.create(
+        usuario=pedido.repartidor,
+        sede=pedido.sede,
+        pedido=pedido,
+        tipo=TipoNotificacion.REPARTIDOR_ASIGNADO,
+        canal=CanalNotificacion.SISTEMA,
+        asunto=f"Nuevo pedido #{pedido.pk}",
+        mensaje=(
+            f"Se te asignó el pedido #{pedido.pk}. "
+            f"Dirección de entrega: {pedido.direccion_entrega}"
+        ),
+    )
+
 def notificaciones_visibles_para(usuario):
     """Alertas de panel que ve el personal: las de sus sedes y las suyas propias.
 
-    El admin ve las de todas las sedes de su negocio; operador y cocina, las de
-    las sedes donde están asignados.
+    El admin ve las de todas las sedes de su negocio; operador y cocina ven las de sus sedes 
+    y las suyas; el repartidor solo las suyas.
     """
     from django.db.models import Q
 
     from apps.sedes.models import Sede, SedeUsuario
     from apps.usuarios.models import Rol
+
+    if usuario.rol == Rol.REPARTIDOR:
+        # El repartidor solo ve los avisos dirigidos a él (HU-7.6), nunca las
+        # alertas generales de la sede, que son del operador.
+        return Notificacion.objects.filter(
+            canal=CanalNotificacion.SISTEMA, usuario=usuario
+        )
 
     if usuario.rol == Rol.ADMIN:
         sedes = Sede.objects.filter(negocio_id=usuario.negocio_id).values("pk")
