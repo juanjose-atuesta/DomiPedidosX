@@ -6,6 +6,7 @@ import { usePedidos } from "../../hooks/usePedidos"
 import { useSedesUsuario } from "../../hooks/useSedesUsuario"
 import { formatearHora, moneda } from "../../utils/formato"
 import { ETIQUETA_ESTADO, accionEstado } from "../../utils/pedidos"
+import CampanaNotificaciones from "../../components/CampanaNotificaciones"
 import { useCompartirUbicacion } from "../../hooks/useCompartirUbicacion"
 
 const SECCIONES = [
@@ -92,7 +93,7 @@ function TarjetaEntrega({ pedido, procesando, onAvanzar, usuarioId }) {
 export default function PedidosRepartidor() {
   const { usuario, logout } = useAuth()
   const { sedes } = useSedesUsuario()
-  const { pedidos, cargando, error, procesandoId, avanzar } = usePedidos({
+  const { pedidos, cargando, error, procesandoId, avanzar, recargar } = usePedidos({
     sede: "",
     estado: ESTADOS_REPARTO,
   })
@@ -107,9 +108,13 @@ export default function PedidosRepartidor() {
             {usuario?.negocio ? ` · ${usuario.negocio.nombre}` : ""}
           </p>
         </div>
-        <Boton tipo="contornoClaro" pequeno className="px-4 text-sm" onClick={logout}>
-          Cerrar sesión
-        </Boton>
+
+        <div className="flex items-center gap-2">
+          <CampanaNotificaciones onNuevas={recargar} intervalo={3000} />
+          <Boton tipo="contornoClaro" pequeno className="px-4 text-sm" onClick={logout}>
+            Cerrar sesión
+          </Boton>
+        </div>
       </header>
 
       <main className="mx-auto flex w-full max-w-[640px] flex-col gap-6 p-4">
