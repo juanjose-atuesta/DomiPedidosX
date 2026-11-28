@@ -1,6 +1,8 @@
 from rest_framework import serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .alterna import sede_alterna_mas_cercana
+from .capacidad import MENSAJE_CAPACIDAD_LLENA
 
 from apps.core.permissions import (
     EsAdmin,
@@ -133,6 +135,22 @@ class PedidoEstadoView(APIView):
         return Response(PedidoSerializer(pedido).data)
 
 
+def _sede_alterna_json(alterna):
+    sede = alterna["sede"]
+    cotizacion = alterna["cotizacion"]
+    zona = cotizacion["zona"]
+    distancia = alterna["distancia_km"]
+    return {
+        "id": str(sede.pk),
+        "nombre": sede.nombre,
+        "direccion": sede.direccion,
+        "distancia_km": None if distancia is None else round(distancia, 1),
+        "zona": zona.nombre if zona else None,
+        "costo_domicilio": f"{cotizacion['costo_domicilio']:.2f}",
+        "total": f"{cotizacion['total']:.2f}",
+        "tiempo_estimado_min": cotizacion["tiempo_estimado_min"],
+    }
+
 class PedidoCotizarView(APIView):
     """Desglose del pedido antes de confirmarlo (HU-5.2).
 
@@ -165,6 +183,20 @@ class PedidoCotizarView(APIView):
 
         zona = cotizacion["zona"]
         promocion = cotizacion["promocion"]
+        capacidad_llena = MENSAJE_CAPACIDAD_LLENA in cotizacion["problemas"]
+        sede_alterna = None
+        if capacidad_llena:
+            alterna = sede_alterna_mas_cercana(
+                datos["sede"],
+                detalles=datos["detalles"],
+                tipo=datos["tipo"],
+                entrega_lat=datos.get("entrega_lat"),
+                entrega_lng=datos.get("entrega_lng"),
+                codigo_promocion=datos.get("codigo_promocion", ""),
+                promocion_id=datos.get("promocion_id"),
+            )
+            if alterna:
+                sede_alterna = _sede_alterna_json(alterna)
         return Response(
             {
                 "subtotal": f"{cotizacion['subtotal']:.2f}",
@@ -188,6 +220,8 @@ class PedidoCotizarView(APIView):
                 "error_promocion": cotizacion["error_promocion"],
                 "problemas": cotizacion["problemas"],
                 "puede_confirmar": not cotizacion["problemas"],
+                "capacidad_llena": capacidad_llena,
+                "sede_alterna": sede_alterna,
             }
         )
 

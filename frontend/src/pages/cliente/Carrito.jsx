@@ -26,7 +26,7 @@ import { mensajeDeError } from "../../utils/errores"
 
 export default function Carrito() {
   const navigate = useNavigate()
-  const { carritos, cambiarCantidad, quitar, vaciar } = useCarrito()
+  const { carritos, cambiarCantidad, quitar, vaciar, mover } = useCarrito()
   const [sedes, setSedes] = useState([])
   const [direcciones, setDirecciones] = useState([])
   const [cargando, setCargando] = useState(true)
@@ -38,6 +38,7 @@ export default function Carrito() {
   const [codigoPromocion, setCodigoPromocion] = useState("")
   const [error, setError] = useState("")
   const [enviando, setEnviando] = useState(false)
+  const [cambioSede, setCambioSede] = useState(null)
 
   useEffect(() => {
     let vigente = true
@@ -86,6 +87,28 @@ export default function Carrito() {
       : null
   const { cotizacion, cargando: cotizando, error: errorCotizacion } = useCotizacion(datosPrecio)
   const puedeConfirmar = Boolean(cotizacion?.puede_confirmar) && !cotizando
+  const sedeAlterna = cotizacion?.capacidad_llena
+  ? cotizacion.sede_alterna
+  : null
+  const vieneDeOtraSede = cambioSede?.destinoId === sedeId
+
+const aceptarSedeAlterna = (alterna) => {
+  setCambioSede({
+    origenId: sedeId,
+    origenNombre: nombreSede(sedeId),
+    destinoId: alterna.id,
+    destinoNombre: alterna.nombre,
+  })
+
+  mover(sedeId, alterna.id)
+  setSedeElegida(alterna.id)
+}
+
+const volverASedeOriginal = () => {
+  mover(cambioSede.destinoId, cambioSede.origenId)
+  setSedeElegida(cambioSede.origenId)
+  setCambioSede(null)
+}
 
   const confirmar = async () => {
     if (enviando || !datosPrecio || !puedeConfirmar) return
@@ -122,7 +145,37 @@ export default function Carrito() {
   return (
     <ClienteLayout titulo="Carrito" volverA="/cliente" barra>
       {error && <MensajeAlerta tipo="error">{error}</MensajeAlerta>}
+      {vieneDeOtraSede ? (
+  <MensajeAlerta tipo="info">
+    Tu pedido se hará en{" "}
+    <strong>{cambioSede.destinoNombre}</strong>, porque{" "}
+    {cambioSede.origenNombre} está llena.{" "}
 
+    <button
+      type="button"
+      onClick={volverASedeOriginal}
+      className="font-semibold underline"
+    >
+      Volver a mi sede
+    </button>
+  </MensajeAlerta>
+) : (
+  sedeAlterna && (
+    <MensajeAlerta tipo="aviso">
+      <p>
+        {nombreSede(sedeId)} alcanzó su capacidad. La sede más cercana
+        con cupo es <strong>{sedeAlterna.nombre}</strong>.
+      </p>
+
+      <Boton
+        tipo="secundario"
+        onClick={() => aceptarSedeAlterna(sedeAlterna)}
+      >
+        Pedir en {sedeAlterna.nombre}
+      </Boton>
+    </MensajeAlerta>
+  )
+)}
       {sedesConLineas.length > 1 ? (
         <CampoSelect
           etiqueta="Carrito de la sede"

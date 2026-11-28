@@ -6,6 +6,12 @@ export async function listarPedidos(filtros = {}) {
   return data
 }
 
+// Obtener los detalles de un pedido específico.
+export async function obtenerPedido(id) {
+  const { data } = await api.get(`/pedidos/${id}/`)
+  return data
+}
+
 export async function actualizarEstadoPedido(id, estado, comentario = "") {
   const { data } = await api.patch(`/pedidos/${id}/estado/`, { estado, comentario })
   return data
