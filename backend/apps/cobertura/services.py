@@ -2,8 +2,10 @@
 
 import math
 from decimal import Decimal
-
+from datetime import datetime, time, timedelta
 from .models import TipoCobertura, ZonaCobertura
+
+from django.utils import timezone
 
 RADIO_TIERRA_KM = 6371.0088
 MINIMO_PUNTOS_POLIGONO = 3
@@ -122,3 +124,40 @@ def validar_geometria(tipo, *, centro_lat, centro_lng, radio_km, poligono):
             "poligono": normalizar_poligono(poligono),
         }
     raise ValueError("El tipo de zona debe ser 'radio' o 'poligono'.")
+
+
+def ocupacion_por_franja(sede, franjas, momento=None):
+    """{franja.pk: pedidos en curso} de las franjas de la sede (HU-9.4).
+
+    Cuenta los pedidos Recibidos o En preparación creados hoy dentro de cada
+    franja, igual que `verificar_capacidad_sede` (HU-9.5). Las franjas de otro
+    día de la semana quedan en None: hoy no tienen ocupación.
+    """
+    from apps.pedidos.capacidad import ESTADOS_EN_CURSO
+    from apps.pedidos.models import Pedido
+
+    franjas = list(franjas)
+    if not franjas:
+        return {}
+    momento = timezone.localtime(momento)
+    inicio_dia = timezone.make_aware(
+        datetime.combine(momento.date(), time.min), timezone.get_current_timezone()
+    )
+    horas = [
+        timezone.localtime(creado).time()
+        for creado in Pedido.objects.filter(
+            sede=sede,
+            estado__in=ESTADOS_EN_CURSO,
+            creado_en__gte=inicio_dia,
+            creado_en__lt=inicio_dia + timedelta(days=1),
+        ).values_list("creado_en", flat=True)
+    ]
+    hoy = momento.isoweekday()
+    return {
+        franja.pk: (
+            sum(1 for hora in horas if franja.hora_inicio <= hora < franja.hora_fin)
+            if franja.dia_semana == hoy
+            else None
+        )
+        for franja in franjas
+    }

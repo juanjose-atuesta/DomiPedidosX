@@ -101,6 +101,9 @@ class CapacidadFranjaSerializer(serializers.ModelSerializer):
 
     sede_id = serializers.UUIDField(read_only=True)
     hora_fin = serializers.TimeField(read_only=True)
+    # HU-9.4: pedidos en curso de la franja de hoy; None si la franja no es de hoy
+    # o si la vista no calculó la ocupación (respuestas de crear/editar).
+    pedidos_actuales = serializers.SerializerMethodField()
     max_pedidos_simultaneos = serializers.IntegerField(min_value=1)
 
     class Meta:
@@ -112,9 +115,14 @@ class CapacidadFranjaSerializer(serializers.ModelSerializer):
             "hora_inicio",
             "hora_fin",
             "max_pedidos_simultaneos",
+            "umbral_alerta_pct",  # solo lectura: lo define HU-9.3
+            "pedidos_actuales",
             "activa",
         )
-        read_only_fields = ("id", "sede_id", "hora_fin")
+        read_only_fields = ("id", "sede_id", "hora_fin", "umbral_alerta_pct")
+
+    def get_pedidos_actuales(self, obj):
+        return self.context.get("ocupacion", {}).get(obj.pk)
 
     def validate_hora_inicio(self, value):
         if value.minute or value.second or value.microsecond:

@@ -12,7 +12,7 @@ from apps.usuarios.models import Rol
 
 from .models import ZonaCobertura
 from .serializers import ZonaCoberturaSerializer, ZonaPublicaSerializer
-from .services import zonas_que_cubren
+from .services import zonas_que_cubren, ocupacion_por_franja
 
 from .serializers import CapacidadFranjaSerializer
 from .models import CapacidadFranja
@@ -153,7 +153,7 @@ class CapacidadSedeView(APIView):
     su propia sede; el admin puede hacerlo en cualquier sede de su negocio.
     """
 
-    permission_classes = [EsAdmin | EsOperador]
+    permission_classes = [EsOperador]
 
     def _sede(self, request, sede_id):
         sede = _sede_del_negocio(request, sede_id)
@@ -167,12 +167,13 @@ class CapacidadSedeView(APIView):
         sede = self._sede(request, sede_id)
         if sede is None:
             return Response({"detail": "Sede no encontrada."}, status=status.HTTP_404_NOT_FOUND)
-        franjas = sede.franjas_capacidad.filter(activa=True).order_by("dia_semana", "hora_inicio")
+        franjas = list(sede.franjas_capacidad.filter(activa=True).order_by("dia_semana", "hora_inicio"))
+        contexto = {"ocupacion": ocupacion_por_franja(sede, franjas)}
         return Response(
             {
                 "sede_id": str(sede.pk),
                 "tope_general": sede.tope_general_pedidos,
-                "franjas": CapacidadFranjaSerializer(franjas, many=True).data,
+                "franjas": CapacidadFranjaSerializer(franjas, many=True, context=contexto).data,
             }
         )
 
