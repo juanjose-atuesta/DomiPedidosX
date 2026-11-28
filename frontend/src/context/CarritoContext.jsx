@@ -35,6 +35,29 @@ function CarritoDeUsuario({ clave, children }) {
       return nuevas.length > 0 ? { ...resto, [sedeId]: nuevas } : resto
     })
 
+  const mover = (sedeOrigen, sedeDestino) => {
+  if (!sedeOrigen || !sedeDestino || sedeOrigen === sedeDestino) return
+
+  setCarritos((actuales) => {
+    const lineasOrigen = actuales[sedeOrigen] ?? []
+    const lineasDestino = actuales[sedeDestino] ?? []
+
+    if (lineasOrigen.length === 0) return actuales
+
+    const nuevasLineas = lineasOrigen.reduce(
+      (acumuladas, linea) => agregarLinea(acumuladas, linea),
+      lineasDestino,
+    )
+
+    const { [sedeOrigen]: _, [sedeDestino]: __, ...resto } = actuales
+
+    return {
+      ...resto,
+      [sedeDestino]: nuevasLineas,
+    }
+  })
+}
+
   const valor = {
     carritos,
     agregar: (sedeId, linea) => actualizar(sedeId, (ls) => agregarLinea(ls, linea)),
@@ -42,6 +65,7 @@ function CarritoDeUsuario({ clave, children }) {
       actualizar(sedeId, (ls) => cambiarCantidadLinea(ls, clave, cantidad)),
     quitar: (sedeId, clave) => actualizar(sedeId, (ls) => quitarLinea(ls, clave)),
     vaciar: (sedeId) => actualizar(sedeId, () => []),
+    mover,
   }
 
   return <CarritoContext.Provider value={valor}>{children}</CarritoContext.Provider>
