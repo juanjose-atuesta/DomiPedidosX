@@ -27,3 +27,23 @@ export async function verificarCobertura([lat, lng], sedeId) {
   })
   return data
 }
+
+export async function listarFranjas(sedeId) {
+  const { data } = await api.get(`/cobertura/sedes/${sedeId}/capacidad/`)
+  return data
+}
+
+export async function crearFranja(sedeId, datos) {
+  const { data } = await api.post(`/cobertura/sedes/${sedeId}/capacidad/`, datos)
+  return data
+}
+
+export async function actualizarFranja(id, datos) {
+  const { data } = await api.patch(`/cobertura/capacidad/${id}/`, datos)
+  return data
+}
+
+export async function eliminarFranja(id) {
+  const { data } = await api.delete(`/cobertura/capacidad/${id}/`)
+  return data
+}
